@@ -4,9 +4,8 @@ from __future__ import annotations
 import contextlib
 import io
 import json
-import os
 import shutil
-import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -279,17 +278,30 @@ class Verify(Base):
 class OnChain(Base):
     KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"  # anvil default account 0
     ACCT = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-    PORT = "8547"
+
+    @staticmethod
+    def _free_port() -> str:
+        """A port nothing listens on, so a node left over from an interrupted run (or any other
+        service) can never answer in place of this test's own node."""
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return str(s.getsockname()[1])
 
     def setUp(self):
         super().setUp()
-        self.node = subprocess.Popen(["anvil", "--port", self.PORT, "--silent"], start_new_session=True)
+        port = self._free_port()
+        # Same process group as the test, so Ctrl-C in a terminal stops the node too.
+        self.node = subprocess.Popen(["anvil", "--port", port, "--silent"])
         self.addCleanup(self._stop_node)  # runs even if the rest of setUp fails
-        self.rpc = f"http://127.0.0.1:{self.PORT}"
+        self.rpc = f"http://127.0.0.1:{port}"
         for _ in range(100):
+            if self.node.poll() is not None:
+                self.fail(f"anvil exited with code {self.node.returncode} before it was ready")
             if subprocess.run(["cast", "chain-id", "--rpc-url", self.rpc], capture_output=True).returncode == 0:
                 break
             time.sleep(0.1)
+        else:
+            self.fail("anvil did not become ready within 10 s")
         r = subprocess.run(
             ["forge", "create", "src/EnforcedToken.sol:EnforcedToken", "--rpc-url", self.rpc, "--private-key", self.KEY,
              "--broadcast", "--constructor-args", self.ACCT, "[]"],  # authority = account 0 (a plain key
@@ -299,8 +311,13 @@ class OnChain(Base):
         self.token = next(l.split()[-1] for l in r.stdout.splitlines() if "Deployed to" in l)
 
     def _stop_node(self):
-        os.killpg(self.node.pid, signal.SIGTERM)
-        self.node.wait()
+        if self.node.poll() is None:
+            self.node.terminate()
+            try:
+                self.node.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.node.kill()
+                self.node.wait()
 
     def _block(self, a: str):
         r = subprocess.run(["cast", "send", self.token, "setStatus(address,uint8,bytes32)", a, "2", "0x" + "00" * 32,
