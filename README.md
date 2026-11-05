@@ -141,7 +141,7 @@ Unit tests (`test/Tiered.t.sol`, 26 tests) cover each tier boundary, adding and 
 
 ## Cross-chain bridging
 
-`BridgedEnforcedToken` implements the bridge-facing part of [ERC-7281](https://github.com/ethereum/ERCs/blob/master/ERCS/erc-7281.md): the issuer deploys one canonical token per chain, and allow-listed bridges burn on the source chain and mint on the destination. No collateral is locked and no wrapped token is created, so value on every chain stays under the issuer's controls.
+`BridgedEnforcedToken` implements the bridge-facing part of ERC-7281 (xERC20). ERC-7281 is a draft: its specification is in an unmerged pull request to the ERC repository ([ethereum/ERCs#89](https://github.com/ethereum/ERCs/pull/89)), and it is discussed on [Ethereum Magicians](https://ethereum-magicians.org/t/erc-7281-sovereign-bridged-tokens/14979). The issuer deploys one canonical token per chain, and allow-listed bridges burn on the source chain and mint on the destination. No collateral is locked and no wrapped token is created, so value on every chain stays under the issuer's controls.
 
 - **Bridge-out** (`burn`) applies the outbound-transfer rules: the holder must be `ACTIVE`, only the spendable balance can leave (held value stays), and a `BLOCKED` bridge cannot burn.
 - **Bridge-in** (`mint` by a bridge) applies the inbound-transfer rule: no minting to a `BLOCKED` account. A `FROZEN` account can still receive. A `BLOCKED` bridge cannot mint, so blocking a bridge shuts it in both directions.
