@@ -197,7 +197,7 @@ The Halmos checks make the token's entire storage symbolic, so they quantify ove
 ```bash
 pip install halmos==0.3.3
 make prove          # token, bridged-token and tiered-authority proofs  (~5 min)
-make mutate         # 49 injected bugs, each must yield a counterexample (~20 min)
+make mutate         # 49 injected bugs, each must yield a counterexample (~60 min on one core)
 ```
 
 ## Repository layout
@@ -255,7 +255,8 @@ If you cloned without `--recursive`, run `git submodule update --init` first.
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request, with Foundry v1.5.1 and Halmos 0.3.3:
 
 - **reproduce**: `make test`, `make tools`, `make ingest`, `make bench` and `make data`. The job then fails unless `results/*.csv`, `data/ingest/` and `data/smt_*.json` are byte-identical to the committed files.
-- **proofs**: `make prove` and `make mutate`. The job fails if any proof fails or any injected bug survives.
+- **proofs**: `make prove`. The job fails if any proof fails.
+- **mutate**: the mutation check in four parallel shards (`scripts/mutation_check.py --shard I/4`). A shard fails if any of its injected bugs survives, or if any mutant's pattern no longer matches the sources.
 
 ### Measurement notes
 

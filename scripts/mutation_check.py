@@ -6,9 +6,14 @@ src/BridgedEnforcedToken.sol, twenty-four into src/TieredAuthority.sol),
 runs the relevant Halmos check, and requires a counterexample. The original sources are always
 restored, even on error.
 
-Usage: python3 scripts/mutation_check.py      (from the repository root; ~20 min)
-Exit code 0 iff every mutant is killed.
+Usage (from the repository root):
+  python3 scripts/mutation_check.py                 all mutants (~60 min on one core)
+  python3 scripts/mutation_check.py budget          only mutants whose name contains "budget"
+  python3 scripts/mutation_check.py --shard 2/4     every 4th mutant starting at index 2 (CI runs 4 shards)
+Every mutant's pattern is checked before anything runs, whatever the filter or shard.
+Exit code 0 iff every selected mutant is killed.
 """
+import argparse
 import re
 import subprocess
 import sys
@@ -159,26 +164,37 @@ def halmos(contract: str, function: str, flags) -> str:
 
 
 def main() -> int:
-    # optional: a substring filter on mutant names, e.g. `mutation_check.py budget`
-    only = sys.argv[1] if len(sys.argv) > 1 else None
-    originals = {path: path.read_text() for path, _, _ in (TOKEN, BRIDGED, AUTH)}
-    selected = [m for m in MUTANTS if only is None or only in m[1]]
-    if not selected:
-        print(f"no mutant matches {only!r}")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("only", nargs="?", help="run only mutants whose name contains this text")
+    ap.add_argument("--shard", default="0/1", help="I/N: run mutants with index = I (mod N)")
+    args = ap.parse_args()
+    i, n = (int(x) for x in args.shard.split("/"))
+    if not 0 <= i < n:
+        print(f"bad shard {args.shard!r}")
         return 2
+
+    originals = {path: path.read_text() for path, _, _ in (TOKEN, BRIDGED, AUTH)}
+    # every pattern must match exactly once, so a stale mutant fails in every shard
+    bad = [name for (path, _, _), name, _, old, _ in MUTANTS if originals[path].count(old) != 1]
+    if bad:
+        for name in bad:
+            print(f"[ERROR] pattern for '{name}' not found exactly once")
+        return 2
+    selected = [m for m in MUTANTS[i::n] if args.only is None or args.only in m[1]]
+    if not selected:
+        print("no mutant selected")
+        return 2
+    print(f"{len(selected)} of {len(MUTANTS)} mutants selected", flush=True)
     killed = 0
     try:
         for (path, contract, flags), name, fn, old, new in selected:
             original = originals[path]
-            if original.count(old) != 1:
-                print(f"[ERROR] pattern for '{name}' not found exactly once")
-                return 2
             path.write_text(original.replace(old, new, 1))
             out = halmos(contract, fn, flags)
             path.write_text(original)
             ok = "Counterexample" in out or "[FAIL]" in out
             killed += ok
-            print(f"[{'KILLED' if ok else 'SURVIVED'}] {name}  ({fn})")
+            print(f"[{'KILLED' if ok else 'SURVIVED'}] {name}  ({fn})", flush=True)
     finally:
         for path, text in originals.items():
             path.write_text(text)
