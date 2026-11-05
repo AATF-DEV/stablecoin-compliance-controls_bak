@@ -11,8 +11,9 @@ import {EnforcedToken} from "../src/EnforcedToken.sol";
 /// ALL contract states, not just reachable-by-fuzzing ones. Each check assumes the
 /// invariant for the accounts the call touches, executes one public function with
 /// symbolic arguments and caller, and asserts that the invariant still holds and that
-/// the state changed exactly as specified. Together with the initial state (all zero,
-/// which satisfies every invariant) this is an inductive proof over all call sequences.
+/// the state changed exactly as specified. Together with the initial state (no balances,
+/// holds or log entries; only the deployment's custody list), which satisfies every
+/// invariant, this is an inductive proof over all call sequences.
 /// An untouched account `o` is checked to be unchanged, which extends per-account
 /// statements to all accounts. Allowances are covered the same way: transferFrom spends exactly
 /// `amt` of a finite allowance and keeps an infinite one, approve sets exactly one entry, and an

@@ -61,6 +61,48 @@ Account states:
 | `FROZEN` (1) | blocked | allowed (receive-only) |
 | `BLOCKED` (2) | blocked | blocked |
 
+## How it works
+
+### Deployment
+
+1. Deploy an authority: `ComplianceAuthority(signers, M)`, or `TieredAuthority(signers, roles, attestations, guardians, policy)` for the asymmetric policy below.
+2. Deploy `EnforcedToken(authority, custodians)` (or `BridgedEnforcedToken` with the same arguments). `custodians` is the initial custody list, the only addresses a seizure can credit. The deployer becomes the `minter`, which can only mint.
+3. With `TieredAuthority`, the deployer calls `bindToken(token)` once. The token must name the authority, or the call reverts.
+4. For bridging, allow-list each bridge adapter by setting its limits through the authority (`setLimits`).
+
+### One compliance action
+
+1. **Proposal.** Off-chain, the action is fixed as `(target, calldata, e)`, where `e` is the hash of its evidence bundle: the lawful order and its review, or the evidence hash a list update from the ingestion tool carries.
+2. **Signing.** Each signer computes `digest(target, calldata, e, nonce, deadline)` on the authority. This is an EIP-712 digest whose domain binds the chain id and the authority's address, so a signature is valid for one action on one chain and one contract. The 65-byte `(r, s, v)` signatures are concatenated in ascending order of signer address.
+3. **Submission.** Anyone can submit the signatures:
+   - `ComplianceAuthority.execute(...)` checks M signatures and calls the token;
+   - `TieredAuthority.execute(...)` (fast tier) checks M_r signatures and the classification, and calls the token at once;
+   - `TieredAuthority.queue(...)` (slow tier) checks M_i signatures and records the action; after the delay, anyone calls `executeQueued(...)`; before that, guardians can call `cancel(id, signatures)`, signing `cancelDigest(id)`.
+4. **Enforcement.** The token checks the call came from its authority, applies the rules of the action, and appends one entry to its audit log.
+
+### Audit log
+
+Every compliance action updates `logHead` and `logCount` and emits `ComplianceAction(seq, action, paramsHash, evidenceHash, newHead)`, where
+
+```
+newHead = keccak256(abi.encode(previousHead, seq, action, paramsHash, evidenceHash))
+```
+
+starting from `previousHead = 0` and `seq = 0`. An auditor recomputes the head by replaying the events in order and compares it with `logHead()` and `logCount()`; a missing, reordered or altered event changes the result. The evidence bundle itself stays off-chain.
+
+| `action` | Function | `paramsHash` = keccak256 of |
+|---:|---|---|
+| 1 | `setStatus(a, s, e)` | `abi.encode(a, s)` |
+| 2 | `placeHold(id, a, amt, e)` | `abi.encode(id, a, amt)` |
+| 3 | `releaseHold(id, e)` | `abi.encode(id)` |
+| 4 | `seize(id, amt, dest, e)` | `abi.encode(id, amt, dest)` |
+| 5 | `burnFromHold(id, amt, e)` | `abi.encode(id, amt)` |
+| 6 | `blockBatch(accounts, e)` | `abi.encodePacked(accounts)` |
+| 7 | `setLimits(bridge, m, u, e)` (bridged token) | `abi.encode(bridge, m, u)` |
+| 8 | `setCustody(a, allowed, e)` | `abi.encode(a, allowed)` |
+
+Read-only views for auditors: `statusOf`, `balanceOf`, `heldOf`, `spendableOf`, `holds(id)`, `isCustody`, `logHead`, `logCount`, and on the bridged token the minting and burning limits of each bridge. The repository has no separate replay script; `test/Security.t.sol` (`test_logIsHashChained`) and the Halmos checks verify the formula for every action.
+
 ## Tiered authority
 
 `TieredAuthority` can replace `ComplianceAuthority` as the token's authority. `EnforcedToken` is unchanged.
@@ -165,6 +207,20 @@ The table maps each check to the adversary it addresses (paper, Section 3.2).
 | On-chain check (optional) | Reads `statusOf` over RPC. Applied addresses that are not `BLOCKED` are reported as drift (exit code 3). Additions already blocked are noted. Batches never depend on chain state, so the result stays reproducible. | A5 |
 | Second reviewer | `verify` recomputes from the reviewer's own copies. Exit 0 only if the evidence hash, address set, diff and every action's calldata are identical. | A1/A2 (shared tooling), A3 |
 
+Outputs of `build`, all in the `--out` directory:
+- `manifest.json`: the reproducible result that `verify` compares. It holds the publish date, assets, list hash, evidence hash (and the previous one), the full address list, the diff (`add`, `remove`, `unchanged`), the batching parameters, every action (`tier`, `function`, `addresses`, `calldata`, `estimatedTxGas`, `evidenceHash`) and the warnings.
+- `provenance.json`: for each source, its name, SHA-256, size, format, number of entries, non-EVM entries skipped and publish date.
+- `report.md`: a human-readable summary for the reviewers: sources and their hashes, warnings, actions with estimated gas, additions, removals (to check against open cases), the on-chain check if `--rpc` was given, and instructions for the second reviewer.
+
+Exit codes:
+
+| Code | `build` | `verify` |
+|---:|---|---|
+| 0 | manifest written | recomputed result matches the manifest |
+| 1 | — | mismatch; the differing fields are printed |
+| 2 | stopped: a check failed (`STOP: …`), nothing written | stopped: a check failed |
+| 3 | manifest written, but the on-chain state has drifted from the applied list | — |
+
 Testing:
 - [`scripts/tests/test_sanctions_ingest.py`](scripts/tests/test_sanctions_ingest.py) has 25 tests. They include the EIP-55 test vectors and a local anvil chain for the drift check.
 - `scripts/tests/make_demo.py` generates a deterministic demo in [`data/ingest/`](data/ingest/). Version 1 has 1,000 addresses. Version 2 delists 5 and adds 300, one of which is a look-alike of a protected address.
@@ -199,6 +255,52 @@ pip install halmos==0.3.3
 make prove          # token, bridged-token and tiered-authority proofs  (~9 min on two cores)
 make mutate         # 54 injected bugs, each must yield a counterexample (~2 h on two cores; CI runs six shards in parallel)
 ```
+
+## What is checked
+
+| Check | Where | Count | Run with |
+|---|---|---:|---|
+| Unit tests: quorum, enforcement semantics, custody list, SMT | `test/Security.t.sol` | 18 | `make test` |
+| Unit tests: tiered authority | `test/Tiered.t.sol` | 26 | `make test` |
+| Two-chain tests: bridging and propagation | `test/Bridge.t.sol` | 17 | `make test` |
+| Stateful invariant fuzzing (256 runs × depth 64) | `test/Invariants.t.sol` | 5 invariants | `make test` |
+| Ingestion tool tests | `scripts/tests/test_sanctions_ingest.py` | 25 | `make tools` |
+| Ingestion demo executed on-chain | `test/Ingest.t.sol` | 2 | `make ingest` |
+| Gas benchmarks | `test/Bench.t.sol` | 7 scenarios | `make bench` |
+| Symbolic proofs: token / bridged token / tiered authority | `test/Halmos.t.sol`, `BridgedHalmos.t.sol`, `TieredHalmos.t.sol` | 13 / 16 / 10 | `make prove` |
+| Non-vacuity: injected bugs that must each yield a counterexample | `scripts/mutation_check.py` | 54 (17 / 12 / 25) | `make mutate` |
+
+Forge and Halmos print a pass or fail line per test and check, and the mutation check one `KILLED` or `SURVIVED` line per bug and a final `k/n mutants killed`; in CI these are the job logs. The measured outputs are files, described next.
+
+## Output files
+
+Every benchmark CSV in `results/` has the same columns, one row per measured transaction:
+
+| Column | Meaning |
+|---|---|
+| `variant` | design or action measured |
+| `param` | the scenario's parameter (see below) |
+| `exec_gas` | gas reported for the transaction minus the standard intrinsic cost |
+| `refund` | refund applied, capped at one fifth of the gas used (EIP-3529) |
+| `calldata_bytes` | calldata length |
+| `intrinsic_gas` | 21,000 + 4 per zero and 16 per non-zero calldata byte |
+| `tx_gas` | gas used minus the capped refund, but at least the EIP-7623 calldata floor: the figure reported everywhere in this README and the paper |
+| `exceeds_eip7825` | 1 if `tx_gas` is above the 2²⁴ per-transaction cap |
+
+| File | What it measures | `param` |
+|---|---|---|
+| `transfer_holds.csv` | ERC-20 transfer: `baseline`, `blacklist_mapping`, `separate_aggregate`, `naive_holds`, `enforced_packed` | active holds on the sender |
+| `smt_transfer.csv` | transfer with SMT non-membership proofs (`smt_proofs`) | restricted-set size N |
+| `quorum.csv` | freezing a zero-balance account: `single_key`, `quorum` (N = M + 2) | required signatures M |
+| `batch_update.csv` | restriction-list update through a 2-of-3 quorum: `mapping`, `packed_funded`, `packed_unfunded`, `smt_root` | addresses per batch K |
+| `lifecycle.csv` | each enforcement step on a funded account, 2-of-3 quorum | 0 |
+| `tiered.csv` | `TieredAuthority`: fast actions, slow queue and execute, guardian cancel | signatures supplied |
+| `bridge.csv` | bridge-out, bridge-in, transfer on the bridged token, fast-tier bridge shutdown | 0, or signatures supplied |
+
+Other outputs:
+- `data/smt_<N>.json`: for N restricted addresses, the SMT root, the non-membership proofs for the benchmark's sender and recipient, and the proof for one restricted address, which the tests use to check that the contract rejects it (`make data`).
+- `data/ingest/v1/`, `data/ingest/v2/`: the ingestion demo's `manifest.json`, `provenance.json` and `report.md` (`make ingest`).
+- `make plot` writes `compliance_gas_benchmark.pdf` and `.png` into `results/` (git-ignored); the committed copy of the figure is `docs/compliance_gas_benchmark.png`.
 
 ## Repository layout
 
@@ -245,9 +347,13 @@ make test     # unit tests + invariant fuzzing
 make tools    # ingestion tool tests (uses anvil)
 make ingest   # regenerate the ingestion demo and execute it on-chain
 make bench    # gas benchmarks (forge test --isolate), rewrites results/*.csv
-make plot     # figure from results/
+make plot     # figure from results/ (written to results/)
 make data     # optional: regenerate SMT trees and proofs (~2 min)
+make prove    # symbolic proofs (needs Halmos)
+make mutate   # non-vacuity check (needs Halmos; ~2 h on two cores)
 ```
+
+`make all` runs `test tools ingest prove mutate bench plot` in that order. `git status` afterwards shows whether the committed results and data were reproduced.
 
 If you cloned without `--recursive`, run `git submodule update --init` first.
 
@@ -267,6 +373,16 @@ If you cloned without `--recursive`, run `git submodule update --init` first.
 - **Steady state.** Each compliance scenario performs one unmeasured warm-up action first, so the authority nonce and log head are already non-zero, as they would be on a live deployment. Without it, the first `TieredAuthority` action on a fresh deployment costs about 68,000 gas more (for example 172,978 instead of 104,531 for a fast-tier freeze), for the one-time initialisation of the nonce, budget and log slots.
 - **EIP-7825 cap.** The cap is not enforced by Foundry. It is checked explicitly in the `exceeds_eip7825` column.
 - **SMT data.** Restricted addresses are uniformly random from a fixed seed. Proofs are verified in Python before they are written.
+
+## Limitations
+
+- **Not audited**, and not intended for production use. There is no upgrade path, no signer tooling that decodes and displays what is signed, no intake of lawful orders, and no bridge message transport (the tests use a minimal adapter).
+- **Proof scope.** Signature recovery is abstracted in the tiered-authority proofs, and signature verification in `ComplianceAuthority` is covered by unit tests only. Batches are checked for up to two addresses, signature sets for up to three, and bridge-limit changes for two signatures. Halmos itself is trusted. Properties that were not stated, such as fairness of ordering or liveness, are not covered.
+- **One nonce for both tiers.** Actions on one chain must be signed in order, and an adversary holding M_r keys can, within the restriction budget, invalidate slow-tier actions that are signed but not yet submitted by submitting fast-tier actions first.
+- **Fixed budget epochs.** Two budgets can be spent within a short time around an epoch boundary.
+- **Two chains in one EVM.** The propagation tests switch `block.chainid`; they test signing domains and per-chain state, not cross-chain latency.
+- **Synthetic sanctions data**, as noted above.
+- **Measurements** are for one compiler version and setting, on the Ethereum cost schedule, with a pre-funded transfer recipient and uniformly random SMT addresses.
 
 ## Citation
 
