@@ -281,6 +281,17 @@ contract Bridge is Test {
         cx.bridge.send(alice, 1e6, Y);
     }
 
+    /// Blocking a bridge shuts it in both directions: it can neither burn nor mint.
+    function test_blockedBridgeCannotMint() public {
+        _fast(cy, _status(address(cy.bridge), 2));
+        _on(cy);
+        uint256 supply = cy.t.totalSupply();
+        vm.prank(relayer);
+        vm.expectRevert(abi.encodeWithSelector(EnforcedToken.Restricted.selector, address(cy.bridge)));
+        cy.bridge.deliver(bob, 1e6);
+        assertEq(cy.t.totalSupply(), supply);
+    }
+
     // ================================================================== per-chain propagation (Section 5.6)
     function test_restrictionDoesNotSyncAutomatically() public {
         _bridge(cx, cy, alice, 1_000e6);

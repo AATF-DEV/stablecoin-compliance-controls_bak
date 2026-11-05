@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Non-vacuity check for the Halmos proofs.
 
-Injects bugs one at a time (ten into src/EnforcedToken.sol, nine into src/BridgedEnforcedToken.sol,
-fifteen into src/TieredAuthority.sol),
+Injects bugs one at a time (ten into src/EnforcedToken.sol, ten into src/BridgedEnforcedToken.sol,
+twenty-one into src/TieredAuthority.sol),
 runs the relevant Halmos check, and requires a counterexample. The original sources are always
 restored, even on error.
 
-Usage: python3 scripts/mutation_check.py      (from the repository root; ~12 min)
+Usage: python3 scripts/mutation_check.py      (from the repository root; ~15 min)
 Exit code 0 iff every mutant is killed.
 """
 import re
@@ -57,7 +57,7 @@ MUTANTS = [
     (BRIDGED, "bridge-out ignores the burning limit", "check_bridgeBurn",
      "        _use(l, amt);\n        unchecked {", "        unchecked {"),
     (BRIDGED, "a blocked bridge can burn", "check_bridgeBurn",
-     "if (_acct[msg.sender].status == BLOCKED) revert Restricted(msg.sender);", ""),
+     "if (_acct[msg.sender].status == BLOCKED) revert Restricted(msg.sender); // a blocked bridge is shut", ""),
     (BRIDGED, "bridge-in ignores the minting limit", "check_bridgeMint",
      "            _use(l, amt);\n        }\n        Account storage t", "        }\n        Account storage t"),
     (BRIDGED, "bridge-in to a blocked account", "check_bridgeMint",
@@ -68,6 +68,9 @@ MUTANTS = [
      "        _log(A_LIMITS, keccak256(abi.encode(bridge, mintingLimit, burningLimit)), evidenceHash);\n", ""),
     (BRIDGED, "lowering a limit keeps the old available value", "check_setLimits",
      "nc = c > d ? c - d : 0;", "nc = c;"),
+    (BRIDGED, "a blocked bridge can mint", "check_bridgeMint",
+     "            if (_acct[msg.sender].status == BLOCKED) revert Restricted(msg.sender);\n            _use(l, amt);",
+     "            _use(l, amt);"),
     # ---- TieredAuthority (Section 5.5)
     (AUTH, "fast tier accepts raising a bridge limit", "check_fastBridgeLimits",
      "return (m <= tk.mintingMaxLimitOf(b) && u <= tk.burningMaxLimitOf(b)) ? 1 : 0;", "return 1;"),
@@ -110,6 +113,20 @@ MUTANTS = [
     (AUTH, "a guardian can become a signer", "check_configKeepsPolicy",
      "signers[s].active || isGuardian[s] || role >= MAX_ROLES",
      "signers[s].active || role >= MAX_ROLES"),
+    (AUTH, "blockBatch charged as one account", "check_fastOnlyRestricts",
+     "            return uint256(bytes32(data[4 + off:36 + off]));",
+     "            return 1;"),
+    (AUTH, "value budget counts only the bound token", "check_valueBudget",
+     "function irreversibleValue(address, bytes calldata data) public pure returns (uint256) {\n        if (data.length < 4) return 0;",
+     "function irreversibleValue(address target, bytes calldata data) public view returns (uint256) {\n        if (target != token || data.length < 4) return 0;"),
+    (AUTH, "removeSigner does not decrement signerCount", "check_configBookkeeping",
+     "        signerCount -= 1;\n        if (--_roleCount", "        if (--_roleCount"),
+    (AUTH, "removeSigner does not update role counts", "check_configBookkeeping",
+     "        if (--_roleCount[x.role] == 0) distinctRoles -= 1;\n", ""),
+    (AUTH, "removeSigner does not deactivate the signer", "check_configBookkeeping",
+     "        delete signers[s];\n", ""),
+    (AUTH, "removeGuardian does not decrement guardianCount", "check_configBookkeeping",
+     "        guardianCount -= 1;\n        emit GuardianRemoved", "        emit GuardianRemoved"),
 ]
 
 
@@ -124,10 +141,16 @@ def halmos(contract: str, function: str, flags) -> str:
 
 
 def main() -> int:
+    # optional: a substring filter on mutant names, e.g. `mutation_check.py budget`
+    only = sys.argv[1] if len(sys.argv) > 1 else None
     originals = {path: path.read_text() for path, _, _ in (TOKEN, BRIDGED, AUTH)}
+    selected = [m for m in MUTANTS if only is None or only in m[1]]
+    if not selected:
+        print(f"no mutant matches {only!r}")
+        return 2
     killed = 0
     try:
-        for (path, contract, flags), name, fn, old, new in MUTANTS:
+        for (path, contract, flags), name, fn, old, new in selected:
             original = originals[path]
             if original.count(old) != 1:
                 print(f"[ERROR] pattern for '{name}' not found exactly once")
@@ -142,8 +165,8 @@ def main() -> int:
         for path, text in originals.items():
             path.write_text(text)
         subprocess.run(["forge", "clean"], capture_output=True)
-    print(f"{killed}/{len(MUTANTS)} mutants killed")
-    return 0 if killed == len(MUTANTS) else 1
+    print(f"{killed}/{len(selected)} mutants killed")
+    return 0 if killed == len(selected) else 1
 
 
 if __name__ == "__main__":

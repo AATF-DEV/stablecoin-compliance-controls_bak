@@ -39,15 +39,18 @@ contract Sink {
 ///
 ///   T1  The fast tier only restricts: it never lowers a status, never reduces a held amount,
 ///       never moves a balance, never touches an existing hold, never raises a bridge limit,
-///       never queues, and only runs with at least M_r approvals and within the restriction budget.
+///       never queues, and only runs with at least M_r approvals and within the restriction budget,
+///       which is charged one unit per restrained account (one per address of a blockBatch).
 ///   T2  The fast tier rejects every other target and every non-restrictive selector.
 ///   T3  Queuing needs at least M_i approvals and sets eta = now + delay.
 ///   T4  A queued action executes once, only in [eta, eta + GRACE].
 ///   T5  A cancelled action can never execute; cancelling needs the guardian quorum.
-///   T6  Seized plus burned value never exceeds the per-epoch value budget.
+///   T6  Seized plus burned value never exceeds the per-epoch value budget, whatever the target
+///       (the bound token, a token not yet bound, or any other contract).
 ///   T7  Configuration changes only through the authority itself (i.e. the slow tier), and every
 ///       change leaves a policy with 1 <= M_r < M_i <= N, roles coverable, a non-empty guardian
-///       quorum and delay >= MIN_DELAY; signers and guardians stay disjoint.
+///       quorum and delay >= MIN_DELAY; signers and guardians stay disjoint; and the counters
+///       behind these bounds (signers, roles, guardians) change exactly with the membership.
 contract TieredProofs is SymTest, Test {
     TieredHarness a;
     BridgedEnforcedToken t; // superset of EnforcedToken: also covers bridge-limit actions
@@ -64,6 +67,8 @@ contract TieredProofs is SymTest, Test {
     uint256 qe0;
     uint256 mmax0;
     uint256 bmax0;
+    uint256 ei0; // pre-state budget epoch index
+    uint256 ru0; // pre-state restricted count
 
     function setUp() public {
         address[] memory s = new address[](3);
@@ -149,6 +154,10 @@ contract TieredProofs is SymTest, Test {
         (, r, v) = a.usage();
     }
 
+    function _epoch() internal view returns (uint256 e) {
+        (,,,,,, e,,) = a.policy();
+    }
+
     function _fastData(uint8 which, address x, address y, uint8 s, bytes32 hid, uint96 amt, address dest, bytes32 ev)
         internal
         pure
@@ -201,6 +210,8 @@ contract TieredProofs is SymTest, Test {
         n0 = a.nonce();
         mmax0 = t.mintingMaxLimitOf(o);
         bmax0 = t.burningMaxLimitOf(o);
+        (uint64 e64, uint32 r32,) = a.usage();
+        (ei0, ru0) = (e64, r32);
 
         (bool ok,) = address(a).call(
             abi.encodeCall(
@@ -223,6 +234,11 @@ contract TieredProofs is SymTest, Test {
         (uint256 rb,) = _budgets();
         (uint256 ru,) = _used();
         assert(ru <= rb);
+        // every restrained account is charged: setStatus and placeHold count one account,
+        // blockBatch one per address (the budget counter is reset at an epoch boundary)
+        uint256 w = which == 2 ? 2 : 1;
+        uint256 e = block.timestamp / _epoch();
+        assert(ru == (ei0 == e ? ru0 + w : w));
     }
 
     /// T1 for bridge limits: through the fast tier a limit can only be lowered (e.g. to shut a
@@ -310,14 +326,23 @@ contract TieredProofs is SymTest, Test {
     }
 
     // ============================================================ T6: value budget
-    function check_valueBudget(bool burn, bytes32 hid, uint96 amt, address dest, bytes32 ev, uint256 n, uint256 deadline)
-        public
-    {
-        vm.assume(a.token() == address(t));
+    /// Holds for the bound token, for a token that is not (yet) bound, and for any other target
+    /// (`other` sends the same calldata to an unrelated contract).
+    function check_valueBudget(
+        bool burn,
+        bool other,
+        bytes32 hid,
+        uint96 amt,
+        address dest,
+        bytes32 ev,
+        uint256 n,
+        uint256 deadline
+    ) public {
         bytes memory data = burn
             ? abi.encodeCall(EnforcedToken.burnFromHold, (hid, amt, ev))
             : abi.encodeCall(EnforcedToken.seize, (hid, amt, dest, ev));
-        (bool ok,) = address(a).call(abi.encodeCall(TieredAuthority.executeQueued, (address(t), data, ev, n, deadline)));
+        address target = other ? address(sink) : address(t);
+        (bool ok,) = address(a).call(abi.encodeCall(TieredAuthority.executeQueued, (target, data, ev, n, deadline)));
         if (!ok) return;
         (, uint256 vb) = _budgets();
         (, uint256 vu) = _used();
@@ -371,6 +396,83 @@ contract TieredProofs is SymTest, Test {
         if (which == 2) {
             (bool active,,) = a.signers(x);
             assert(a.isGuardian(x) && !active);
+        }
+    }
+
+    // T7 (bookkeeping): the counters that the policy check relies on change exactly with the
+    // membership they count. Every configuration change flips at most the membership of the one
+    // address it names, and signerCount, _roleCount, distinctRoles and guardianCount move by
+    // exactly the matching amount; any other address and any other role count is unchanged.
+    // The constructor builds the sets through the same internal functions, so by induction the
+    // counters always equal the true sizes, and "1 <= M_r < M_i <= N" etc. refer to real signers.
+    uint256 sc0;
+    uint256 dr0;
+    uint256 gc0;
+    uint256 rc0; // role count of the role the call affects
+    uint256 rc20; // role count of an unrelated role
+    bool xa0;
+    uint8 xr0;
+    bool xg0;
+    bool ya0;
+    uint8 yr0;
+    bytes32 yat0;
+    bool yg0;
+
+    function check_configBookkeeping(uint8 which, address x, uint8 role, bytes32 att, address y, uint256 r2) public {
+        vm.assume(which <= 4 && y != x);
+        (xa0, xr0,) = a.signers(x);
+        xg0 = a.isGuardian(x);
+        uint256 affected = which == 0 ? role : xr0;
+        vm.assume(r2 != affected);
+        (ya0, yr0, yat0) = a.signers(y);
+        yg0 = a.isGuardian(y);
+        sc0 = a.signerCount();
+        dr0 = a.distinctRoles();
+        gc0 = a.guardianCount();
+        rc0 = a.roleCount(affected);
+        rc20 = a.roleCount(r2);
+
+        bytes memory data = _configData(which, x, role, att);
+        vm.prank(address(a)); // a self-call, i.e. an executed slow-tier action
+        (bool ok,) = address(a).call(data);
+        if (!ok) return;
+
+        // frame: nothing else changes
+        {
+            (bool ya, uint8 yr, bytes32 yat) = a.signers(y);
+            assert(ya == ya0 && yr == yr0 && yat == yat0 && a.isGuardian(y) == yg0);
+            assert(a.roleCount(r2) == rc20);
+        }
+        (bool xa, uint8 xr, bytes32 xat) = a.signers(x);
+        if (which == 0) {
+            // addSigner
+            assert(!xa0 && !xg0);
+            assert(xa && xr == role && xat == att && !a.isGuardian(x));
+            assert(a.signerCount() == sc0 + 1 && a.roleCount(role) == rc0 + 1);
+            assert(a.distinctRoles() == dr0 + (rc0 == 0 ? 1 : 0));
+            assert(a.guardianCount() == gc0);
+        } else if (which == 1) {
+            // removeSigner
+            assert(xa0 && !xa);
+            assert(a.signerCount() == sc0 - 1 && a.roleCount(xr0) == rc0 - 1);
+            assert(a.distinctRoles() == dr0 - (rc0 == 1 ? 1 : 0));
+            assert(a.guardianCount() == gc0 && a.isGuardian(x) == xg0);
+        } else if (which == 2) {
+            // addGuardian
+            assert(!xg0 && !xa0);
+            assert(a.isGuardian(x) && !xa);
+            assert(a.guardianCount() == gc0 + 1);
+            assert(a.signerCount() == sc0 && a.distinctRoles() == dr0 && a.roleCount(affected) == rc0);
+        } else if (which == 3) {
+            // removeGuardian
+            assert(xg0 && !a.isGuardian(x));
+            assert(a.guardianCount() == gc0 - 1);
+            assert(xa == xa0 && a.signerCount() == sc0 && a.distinctRoles() == dr0);
+        } else {
+            // setPolicy: membership and counters untouched
+            assert(xa == xa0 && xr == xr0 && a.isGuardian(x) == xg0);
+            assert(a.signerCount() == sc0 && a.distinctRoles() == dr0 && a.guardianCount() == gc0);
+            assert(a.roleCount(affected) == rc0);
         }
     }
 }

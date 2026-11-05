@@ -353,6 +353,43 @@ contract Tiered is Test {
         assertEq(t.balanceOf(custody), 3_000_000e6 + 1);
     }
 
+    /// The value budget is not limited to the bound token: a second token that names this authority,
+    /// and a token before bindToken(), are counted against the same per-epoch budget.
+    function test_valueBudgetCoversEveryTarget() public {
+        // a second token controlled by the same authority
+        EnforcedToken t2 = new EnforcedToken(address(a));
+        t2.mint(alice, 10_000_000e6);
+        bytes32 h = keccak256("order-other-token");
+        _slow(address(t2), abi.encodeCall(EnforcedToken.placeHold, (h, alice, 3_000_000e6, EV)));
+        Q memory q = _queue(address(t2), abi.encodeCall(EnforcedToken.seize, (h, 3_000_000e6, custody, EV)), _s(0, 1, 3));
+        vm.warp(block.timestamp + DELAY);
+        vm.expectRevert(TieredAuthority.BudgetExceeded.selector);
+        _run(q);
+
+        // a fresh authority whose token is not bound yet
+        address[] memory s = new address[](5);
+        uint8[] memory roles = new uint8[](5);
+        bytes32[] memory att = new bytes32[](5);
+        for (uint256 i; i < 5; ++i) {
+            s[i] = vm.addr(spk[i]);
+            roles[i] = i < 3 ? 0 : uint8(i - 2);
+        }
+        address[] memory g = new address[](3);
+        for (uint256 i; i < 3; ++i) g[i] = vm.addr(gpk[i]);
+        TieredAuthority b = new TieredAuthority(s, roles, att, g, _policy());
+        EnforcedToken t3 = new EnforcedToken(address(b));
+        t3.mint(alice, 10_000_000e6);
+        assertEq(b.token(), address(0));
+        (TieredAuthority prev, EnforcedToken prevT) = (a, t);
+        a = b;
+        _slow(address(t3), abi.encodeCall(EnforcedToken.placeHold, (h, alice, 3_000_000e6, EV)));
+        q = _queue(address(t3), abi.encodeCall(EnforcedToken.seize, (h, 3_000_000e6, custody, EV)), _s(0, 1, 3));
+        vm.warp(block.timestamp + DELAY);
+        vm.expectRevert(TieredAuthority.BudgetExceeded.selector);
+        _run(q);
+        (a, t) = (prev, prevT);
+    }
+
     // ================================================================== configuration
     function test_configOnlyThroughSlowTier() public {
         vm.expectRevert(TieredAuthority.OnlySelf.selector);

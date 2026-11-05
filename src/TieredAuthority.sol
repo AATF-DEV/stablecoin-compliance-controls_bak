@@ -279,8 +279,12 @@ contract TieredAuthority {
     }
 
     /// @notice Value an action seizes or burns (counted against the per-epoch value budget).
-    function irreversibleValue(address target, bytes calldata data) public view returns (uint256) {
-        if (target != token || data.length < 4) return 0;
+    /// @dev Counted for EVERY target, not only the bound token: another token that names this
+    ///      contract as its authority, or the bound token before `bindToken`, must not escape the
+    ///      budget. A `seize`/`burnFromHold` selector on any other contract is counted too, which
+    ///      only makes the budget stricter (fail closed).
+    function irreversibleValue(address, bytes calldata data) public pure returns (uint256) {
+        if (data.length < 4) return 0;
         bytes4 sel = bytes4(data[:4]);
         if (sel == IEnforcedToken.seize.selector) {
             (, uint96 amt,,) = abi.decode(data[4:], (bytes32, uint96, address, bytes32));

@@ -12,8 +12,8 @@ import {BridgedEnforcedToken} from "../src/BridgedEnforcedToken.sol";
 ///   B1  bridge-out (`burn`) only by an allow-listed, non-blocked bridge within its burning limit;
 ///       the holder is ACTIVE; at most the spendable balance leaves; held value and every other
 ///       account and hold are untouched; supply falls by exactly the amount; the log is untouched.
-///   B2  bridge-in (`mint` by a non-minter) only by an allow-listed bridge within its minting
-///       limit and never to a BLOCKED account; supply rises by exactly the amount.
+///   B2  bridge-in (`mint` by a non-minter) only by an allow-listed, non-blocked bridge within its
+///       minting limit and never to a BLOCKED account; supply rises by exactly the amount.
 ///   B3  limits change only through the authority; each change sets both maxima, keeps the
 ///       available value within them, and appends exactly the specified log entry.
 /// Adds read-only access to the stored limit fields; no behaviour is changed.
@@ -94,11 +94,13 @@ contract BridgedProofs is HalmosProofs {
         c0 = t.logCount();
         lim0 = _bt().mintingCurrentLimitOf(bridge);
         uint256 max0 = _bt().mintingMaxLimitOf(bridge);
+        uint8 bst0 = t.statusOf(bridge);
 
         bool ok = _call(bridge, abi.encodeCall(EnforcedToken.mint, (to, amt)));
         if (!ok) return;
 
         assert(max0 > 0 && amt <= lim0);
+        assert(bst0 != 2); // a BLOCKED bridge cannot mint
         assert(t0.st != 2); // never to a BLOCKED account
         assert(_a(to).bal == t0.bal + amt && _a(to).held == t0.held && _a(to).st == t0.st);
         assert(t.totalSupply() == s0 + amt);

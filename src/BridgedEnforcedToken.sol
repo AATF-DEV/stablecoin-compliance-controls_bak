@@ -12,7 +12,8 @@ import {EnforcedToken} from "./EnforcedToken.sol";
 ///     ACTIVE, `amt` does not exceed the spendable balance (held value cannot leave), and the calling
 ///     bridge is not BLOCKED. A bridge other than the holder spends the holder's allowance.
 ///   * `mint(to, amt)` by a bridge (bridge in) applies the same check as an inbound transfer: the
-///     recipient is not BLOCKED (FROZEN stays receive-only). The minter's primary issuance is unchanged.
+///     recipient is not BLOCKED (FROZEN stays receive-only), and the calling bridge is not BLOCKED, so
+///     blocking a bridge shuts it in both directions. The minter's primary issuance is unchanged.
 ///   * Each bridge has a minting and a burning limit that refills linearly over DURATION, as in
 ///     ERC-7281. Limits are set only by the authority, and every change is logged in the hash chain.
 ///     Lowering a limit (e.g. to 0 for a compromised bridge) is restrictive; raising it is not.
@@ -52,6 +53,8 @@ contract BridgedEnforcedToken is EnforcedToken {
         if (msg.sender != minter) {
             Limit storage l = _bridges[msg.sender].minting;
             if (l.max == 0) revert NotMinter();
+            // a BLOCKED bridge is shut in both directions, as for burn
+            if (_acct[msg.sender].status == BLOCKED) revert Restricted(msg.sender);
             _use(l, amt);
         }
         Account storage t = _acct[to];
