@@ -14,7 +14,9 @@ import {EnforcedToken} from "../src/EnforcedToken.sol";
 /// the state changed exactly as specified. Together with the initial state (all zero,
 /// which satisfies every invariant) this is an inductive proof over all call sequences.
 /// An untouched account `o` is checked to be unchanged, which extends per-account
-/// statements to all accounts.
+/// statements to all accounts. Allowances are covered the same way: transferFrom spends exactly
+/// `amt` of a finite allowance and keeps an infinite one, approve sets exactly one entry, and an
+/// arbitrary other allowance entry is unchanged by every call.
 contract HalmosProofs is SymTest, Test {
     EnforcedToken t;
     address constant AUTH = address(0xA0);
@@ -63,6 +65,22 @@ contract HalmosProofs is SymTest, Test {
         return t.logCount() == c0 + 1 && t.logHead() == keccak256(abi.encode(hd0, c0, action, paramsHash, ev));
     }
 
+    /// frame condition on an arbitrary allowance entry (owner `ao`, spender `asp`)
+    address internal ao;
+    address internal asp;
+    uint256 internal al0; // its pre-state value
+    uint256 internal alx; // pre-state value of the entry a call is allowed to change
+
+    function _allowPick() internal {
+        ao = svm.createAddress("allowOwner");
+        asp = svm.createAddress("allowSpender");
+        al0 = t.allowance(ao, asp);
+    }
+
+    function _allowSame() internal view returns (bool) {
+        return t.allowance(ao, asp) == al0;
+    }
+
     function _call(address caller, bytes memory data) internal returns (bool ok) {
         vm.prank(caller);
         (ok,) = address(t).call(data);
@@ -79,6 +97,7 @@ contract HalmosProofs is SymTest, Test {
         s0 = t.totalSupply();
         c0 = t.logCount();
 
+        _allowPick();
         bool ok = _call(from, abi.encodeCall(EnforcedToken.transfer, (to, amt)));
         if (!ok) return;
 
@@ -102,6 +121,7 @@ contract HalmosProofs is SymTest, Test {
         assert(t.logCount() == c0); // Inv 6: non-compliance calls never touch the log
         assert(_same(_a(o), o0));
         assert(_holdSnap(id2) == q0); // no other hold record changes
+        assert(_allowSame()); // no allowance changes
     }
 
     function check_transferFrom(address spender, address from, address to, uint256 amt, address o, bytes32 id2) public {
@@ -115,6 +135,9 @@ contract HalmosProofs is SymTest, Test {
         s0 = t.totalSupply();
         c0 = t.logCount();
 
+        alx = t.allowance(from, spender);
+        _allowPick();
+        vm.assume(ao != from || asp != spender);
         bool ok = _call(spender, abi.encodeCall(EnforcedToken.transferFrom, (from, to, amt)));
         if (!ok) return;
 
@@ -128,6 +151,10 @@ contract HalmosProofs is SymTest, Test {
         assert(t.logCount() == c0); // Inv 6: non-compliance calls never touch the log
         assert(_same(_a(o), o0));
         assert(_holdSnap(id2) == q0); // no other hold record changes
+        // allowance: an infinite allowance is kept, a finite one is spent by exactly `amt`
+        if (alx == type(uint256).max) assert(t.allowance(from, spender) == alx);
+        else assert(amt <= alx && t.allowance(from, spender) == alx - amt);
+        assert(_allowSame()); // no other allowance changes
     }
 
     function check_mint(address to, uint256 amt, address o, bytes32 id2) public {
@@ -137,6 +164,7 @@ contract HalmosProofs is SymTest, Test {
         q0 = _holdSnap(id2);
         s0 = t.totalSupply();
         c0 = t.logCount();
+        _allowPick();
         bool ok = _call(address(this), abi.encodeCall(EnforcedToken.mint, (to, amt)));
         if (!ok) return;
         assert(t0.st != 2);
@@ -146,6 +174,7 @@ contract HalmosProofs is SymTest, Test {
         assert(t.logCount() == c0); // Inv 6: non-compliance calls never touch the log
         assert(_same(_a(o), o0));
         assert(_holdSnap(id2) == q0); // no other hold record changes
+        assert(_allowSame()); // no allowance changes
     }
 
     // ============================================================ holds (Inv 1, 2, 4)
@@ -160,6 +189,7 @@ contract HalmosProofs is SymTest, Test {
         c0 = t.logCount();
         hd0 = t.logHead();
 
+        _allowPick();
         bool ok = _call(AUTH, abi.encodeCall(EnforcedToken.placeHold, (id, a, amt, ev)));
         if (!ok) return;
 
@@ -174,6 +204,7 @@ contract HalmosProofs is SymTest, Test {
         assert(_wf(a));
         assert(_same(_a(o), o0));
         assert(_holdSnap(id2) == q0); // no other hold record changes
+        assert(_allowSame()); // no allowance changes
     }
 
     /// Hypothesis for hold-consuming actions: the hold is backed by the account's held amount.
@@ -195,6 +226,7 @@ contract HalmosProofs is SymTest, Test {
         hd0 = t.logHead();
         s0 = t.totalSupply();
 
+        _allowPick();
         bool ok = _call(AUTH, abi.encodeCall(EnforcedToken.releaseHold, (id, ev)));
         if (!ok) return;
 
@@ -206,6 +238,7 @@ contract HalmosProofs is SymTest, Test {
         assert(t.totalSupply() == s0); // Inv 4
         assert(_same(_a(o), o0));
         assert(_holdSnap(id2) == q0); // no other hold record changes
+        assert(_allowSame()); // no allowance changes
     }
 
     function check_seize(bytes32 id, uint96 amt, address dest, bytes32 ev, address o, bytes32 id2) public {
@@ -221,6 +254,7 @@ contract HalmosProofs is SymTest, Test {
         c0 = t.logCount();
 
         hd0 = t.logHead();
+        _allowPick();
         bool ok = _call(AUTH, abi.encodeCall(EnforcedToken.seize, (id, amt, dest, ev)));
         if (!ok) return;
 
@@ -240,6 +274,7 @@ contract HalmosProofs is SymTest, Test {
         assert(_wf(a) && _wf(dest));
         assert(_same(_a(o), o0));
         assert(_holdSnap(id2) == q0); // no other hold record changes
+        assert(_allowSame()); // no allowance changes
     }
 
     function check_burnFromHold(bytes32 id, uint96 amt, bytes32 ev, address o, bytes32 id2) public {
@@ -253,6 +288,7 @@ contract HalmosProofs is SymTest, Test {
         c0 = t.logCount();
 
         hd0 = t.logHead();
+        _allowPick();
         bool ok = _call(AUTH, abi.encodeCall(EnforcedToken.burnFromHold, (id, amt, ev)));
         if (!ok) return;
 
@@ -265,6 +301,7 @@ contract HalmosProofs is SymTest, Test {
         assert(_wf(a));
         assert(_same(_a(o), o0));
         assert(_holdSnap(id2) == q0); // no other hold record changes
+        assert(_allowSame()); // no allowance changes
     }
 
     // ============================================================ status, log (Inv 2, 6)
@@ -277,6 +314,7 @@ contract HalmosProofs is SymTest, Test {
         c0 = t.logCount();
         s0 = t.totalSupply();
 
+        _allowPick();
         bool ok = _call(AUTH, abi.encodeCall(EnforcedToken.setStatus, (a, s, ev)));
         if (!ok) return;
 
@@ -289,6 +327,7 @@ contract HalmosProofs is SymTest, Test {
         assert(t.totalSupply() == s0); // Inv 4
         assert(_same(_a(o), o0));
         assert(_holdSnap(id2) == q0); // no other hold record changes
+        assert(_allowSame()); // no allowance changes
     }
 
     /// Batch of up to two addresses (halmos default array bound). Balances, held amounts and
@@ -308,6 +347,7 @@ contract HalmosProofs is SymTest, Test {
         c0 = t.logCount();
 
         hd0 = t.logHead();
+        _allowPick();
         bool ok = _call(AUTH, abi.encodeCall(EnforcedToken.blockBatch, (xs, ev)));
         if (!ok) return;
 
@@ -324,9 +364,10 @@ contract HalmosProofs is SymTest, Test {
         assert(_wf(x0) && _wf(x1));
         assert(_same(_a(o), o0));
         assert(_holdSnap(id2) == q0);
+        assert(_allowSame()); // no allowance changes
     }
 
-    /// approve changes only allowances: no account, hold, supply or log state moves.
+    /// approve changes exactly one allowance entry: no account, hold, supply or log state moves.
     function check_approve(address owner, address spender, uint256 amt, address o, bytes32 id2) public {
         Acct memory w0 = _a(owner);
         Acct memory o0 = _a(o);
@@ -334,12 +375,15 @@ contract HalmosProofs is SymTest, Test {
         s0 = t.totalSupply();
         c0 = t.logCount();
         bytes32 h0 = t.logHead();
+        _allowPick();
+        vm.assume(ao != owner || asp != spender);
         bool ok = _call(owner, abi.encodeCall(EnforcedToken.approve, (spender, amt)));
         if (!ok) return;
         assert(t.allowance(owner, spender) == amt);
         assert(_same(_a(owner), w0) && _same(_a(o), o0));
         assert(_holdSnap(id2) == q0);
         assert(t.totalSupply() == s0 && t.logCount() == c0 && t.logHead() == h0);
+        assert(_allowSame()); // no other allowance changes
     }
 
     /// Only the minter can mint; any other caller leaves all state unchanged (reverts).

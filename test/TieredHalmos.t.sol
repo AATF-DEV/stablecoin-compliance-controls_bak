@@ -40,9 +40,11 @@ contract Sink {
 ///   T1  The fast tier only restricts: it never lowers a status, never reduces a held amount,
 ///       never moves a balance, never touches an existing hold, never raises a bridge limit,
 ///       never queues, and only runs with at least M_r approvals and within the restriction budget,
-///       which is charged one unit per restrained account (one per address of a blockBatch).
+///       which is charged one unit per restrained account (one per address of a blockBatch); the
+///       approvers cover at least rolesR distinct roles.
 ///   T2  The fast tier rejects every other target and every non-restrictive selector.
-///   T3  Queuing needs at least M_i approvals and sets eta = now + delay.
+///   T3  Queuing needs at least M_i approvals covering at least rolesI distinct roles, and sets
+///       eta = now + delay.
 ///   T4  A queued action executes once, only in [eta, eta + GRACE].
 ///   T5  A cancelled action can never execute; cancelling needs the guardian quorum.
 ///   T6  Seized plus burned value never exceeds the per-epoch value budget, whatever the target
@@ -69,6 +71,7 @@ contract TieredProofs is SymTest, Test {
     uint256 bmax0;
     uint256 ei0; // pre-state budget epoch index
     uint256 ru0; // pre-state restricted count
+    uint256 rq0; // pre-state role requirement
 
     function setUp() public {
         address[] memory s = new address[](3);
@@ -158,6 +161,29 @@ contract TieredProofs is SymTest, Test {
         (,,,,,, e,,) = a.policy();
     }
 
+    function _rolesR() internal view returns (uint256 r) {
+        (,, r,,,,,,) = a.policy();
+    }
+
+    function _rolesI() internal view returns (uint256 r) {
+        (,,, r,,,,,) = a.policy();
+    }
+
+    /// Number of distinct roles (valid roles are < MAX_ROLES = 8) among the first k recovered
+    /// approvers. Written out case by case, independently of the contract's bit-mask popcount.
+    function _distinctRoles(uint256 k) internal view returns (uint256 n) {
+        (, uint8 r0,) = a.signers(a.fakeRec(0));
+        bool v0 = r0 < 8;
+        n = v0 ? 1 : 0;
+        if (k < 2) return n;
+        (, uint8 r1,) = a.signers(a.fakeRec(1));
+        bool v1 = r1 < 8 && !(v0 && r1 == r0);
+        if (v1) n += 1;
+        if (k < 3) return n;
+        (, uint8 r2,) = a.signers(a.fakeRec(2));
+        if (r2 < 8 && !(r2 < 8 && v0 && r2 == r0) && !(r1 < 8 && r2 == r1)) n += 1;
+    }
+
     function _fastData(uint8 which, address x, address y, uint8 s, bytes32 hid, uint96 amt, address dest, bytes32 ev)
         internal
         pure
@@ -212,6 +238,7 @@ contract TieredProofs is SymTest, Test {
         bmax0 = t.burningMaxLimitOf(o);
         (uint64 e64, uint32 r32,) = a.usage();
         (ei0, ru0) = (e64, r32);
+        rq0 = _rolesR();
 
         (bool ok,) = address(a).call(
             abi.encodeCall(
@@ -231,6 +258,7 @@ contract TieredProofs is SymTest, Test {
         assert(a.eta(qid) == qe0); // nothing queued or dequeued
         assert(a.nonce() == n0 + 1);
         assert(k >= _mR());
+        assert(_distinctRoles(k) >= rq0); // the approvers cover at least rolesR roles
         (uint256 rb,) = _budgets();
         (uint256 ru,) = _used();
         assert(ru <= rb);
@@ -290,6 +318,7 @@ contract TieredProofs is SymTest, Test {
         (bool ok,) = address(a).call(abi.encodeCall(TieredAuthority.queue, (address(sink), data, ev, deadline, _sigs(k))));
         if (!ok) return;
         assert(k >= _mI());
+        assert(_distinctRoles(k) >= _rolesI()); // the approvers cover at least rolesI roles
         assert(a.eta(id) == ts + _delay());
         assert(a.nonce() == n0 + 1);
     }

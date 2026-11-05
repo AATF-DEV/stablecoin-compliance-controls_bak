@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Non-vacuity check for the Halmos proofs.
 
-Injects bugs one at a time (ten into src/EnforcedToken.sol, ten into src/BridgedEnforcedToken.sol,
-twenty-one into src/TieredAuthority.sol),
+Injects bugs one at a time (thirteen into src/EnforcedToken.sol, twelve into
+src/BridgedEnforcedToken.sol, twenty-four into src/TieredAuthority.sol),
 runs the relevant Halmos check, and requires a counterexample. The original sources are always
 restored, even on error.
 
-Usage: python3 scripts/mutation_check.py      (from the repository root; ~15 min)
+Usage: python3 scripts/mutation_check.py      (from the repository root; ~20 min)
 Exit code 0 iff every mutant is killed.
 """
 import re
@@ -47,6 +47,13 @@ MUTANTS = [
     (TOKEN, "release logged under the wrong action tag", "check_releaseHold",
      "_log(A_RELEASE, keccak256(abi.encode(id)), evidenceHash);",
      "_log(A_HOLD, keccak256(abi.encode(id)), evidenceHash);"),
+    (TOKEN, "transferFrom does not spend the allowance", "check_transferFrom",
+     "if (a != type(uint256).max) allowance[from][msg.sender] = a - amt;", ""),
+    (TOKEN, "transferFrom spends an infinite allowance", "check_transferFrom",
+     "if (a != type(uint256).max) allowance[from][msg.sender] = a - amt;",
+     "allowance[from][msg.sender] = a - amt;"),
+    (TOKEN, "approve writes the wrong allowance entry", "check_approve",
+     "allowance[msg.sender][spender] = amt;", "allowance[spender][msg.sender] = amt;"),
     # ---- BridgedEnforcedToken (ERC-7281 bridge interface, Sections 4.1 and 5.6)
     (BRIDGED, "frozen holder can bridge out", "check_bridgeBurn",
      "if (u.status != ACTIVE) revert Restricted(user);",
@@ -68,6 +75,11 @@ MUTANTS = [
      "        _log(A_LIMITS, keccak256(abi.encode(bridge, mintingLimit, burningLimit)), evidenceHash);\n", ""),
     (BRIDGED, "lowering a limit keeps the old available value", "check_setLimits",
      "nc = c > d ? c - d : 0;", "nc = c;"),
+    (BRIDGED, "bridge-out does not spend the holder's allowance", "check_bridgeBurn",
+     "if (a != type(uint256).max) allowance[user][msg.sender] = a - amt;", ""),
+    (BRIDGED, "bridge-out spends the wrong allowance entry", "check_bridgeBurn",
+     "if (a != type(uint256).max) allowance[user][msg.sender] = a - amt;",
+     "if (a != type(uint256).max) allowance[msg.sender][user] = a - amt;"),
     (BRIDGED, "a blocked bridge can mint", "check_bridgeMint",
      "            if (_acct[msg.sender].status == BLOCKED) revert Restricted(msg.sender);\n            _use(l, amt);",
      "            _use(l, amt);"),
@@ -125,6 +137,12 @@ MUTANTS = [
      "        if (--_roleCount[x.role] == 0) distinctRoles -= 1;\n", ""),
     (AUTH, "removeSigner does not deactivate the signer", "check_configBookkeeping",
      "        delete signers[s];\n", ""),
+    (AUTH, "fast-tier quorum ignores role coverage", "check_fastOnlyRestricts",
+     "if (_popcount(roleMask) < minRoles) revert RolesNotCovered();", ""),
+    (AUTH, "slow-tier quorum ignores role coverage", "check_queue",
+     "if (_popcount(roleMask) < minRoles) revert RolesNotCovered();", ""),
+    (AUTH, "role count credits a role no approver holds", "check_queue",
+     "x &= 0xff;", "x = (x & 0xff) | 1;"),
     (AUTH, "removeGuardian does not decrement guardianCount", "check_configBookkeeping",
      "        guardianCount -= 1;\n        emit GuardianRemoved", "        emit GuardianRemoved"),
 ]

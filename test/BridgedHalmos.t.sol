@@ -11,7 +11,8 @@ import {BridgedEnforcedToken} from "../src/BridgedEnforcedToken.sol";
 /// 1-4 and 6 and the authority gate are re-proved for it. Adds:
 ///   B1  bridge-out (`burn`) only by an allow-listed, non-blocked bridge within its burning limit;
 ///       the holder is ACTIVE; at most the spendable balance leaves; held value and every other
-///       account and hold are untouched; supply falls by exactly the amount; the log is untouched.
+///       account and hold are untouched; supply falls by exactly the amount; the log is untouched;
+///       a bridge other than the holder spends exactly `amt` of the holder's finite allowance.
 ///   B2  bridge-in (`mint` by a non-minter) only by an allow-listed, non-blocked bridge within its
 ///       minting limit and never to a BLOCKED account; supply rises by exactly the amount.
 ///   B3  limits change only through the authority; each change sets both maxima, keeps the
@@ -66,6 +67,9 @@ contract BridgedProofs is HalmosProofs {
         lim0 = _bt().burningCurrentLimitOf(bridge);
         uint256 max0 = _bt().burningMaxLimitOf(bridge);
 
+        alx = t.allowance(user, bridge);
+        _allowPick();
+        vm.assume(ao != user || asp != bridge);
         bool ok = _call(bridge, abi.encodeCall(BridgedEnforcedToken.burn, (user, amt)));
         if (!ok) return;
 
@@ -81,6 +85,10 @@ contract BridgedProofs is HalmosProofs {
         assert(t.logCount() == c0);
         assert(_same(_a(o), o0));
         assert(_holdSnap(id2) == q0);
+        // a bridge other than the holder spends the holder's allowance exactly like transferFrom
+        if (bridge == user || alx == type(uint256).max) assert(t.allowance(user, bridge) == alx);
+        else assert(amt <= alx && t.allowance(user, bridge) == alx - amt);
+        assert(_allowSame()); // no other allowance changes
     }
 
     // ============================================================ B2: bridge-in
@@ -96,6 +104,7 @@ contract BridgedProofs is HalmosProofs {
         uint256 max0 = _bt().mintingMaxLimitOf(bridge);
         uint8 bst0 = t.statusOf(bridge);
 
+        _allowPick();
         bool ok = _call(bridge, abi.encodeCall(EnforcedToken.mint, (to, amt)));
         if (!ok) return;
 
@@ -110,6 +119,7 @@ contract BridgedProofs is HalmosProofs {
         assert(t.logCount() == c0);
         assert(_same(_a(o), o0));
         assert(_holdSnap(id2) == q0);
+        assert(_allowSame()); // no allowance changes
     }
 
     // ============================================================ B3: limits
@@ -118,6 +128,7 @@ contract BridgedProofs is HalmosProofs {
         s0 = t.totalSupply();
         c0 = t.logCount();
         bytes32 h0 = t.logHead();
+        _allowPick();
         bool ok = _call(caller, abi.encodeCall(BridgedEnforcedToken.setLimits, (bridge, m, u, ev)));
         if (!ok) return;
         assert(caller == AUTH);
@@ -129,5 +140,6 @@ contract BridgedProofs is HalmosProofs {
         assert(t.logHead() == keccak256(abi.encode(h0, c0, uint8(7), keccak256(abi.encode(bridge, m, u)), ev)));
         assert(t.totalSupply() == s0);
         assert(_same(_a(o), o0));
+        assert(_allowSame()); // no allowance changes
     }
 }
