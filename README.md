@@ -68,7 +68,7 @@ Account states:
 | Tier | Actions | Authorization | Timing |
 |---|---|---|---|
 | Fast (`execute`) | Restrictive and reversible only: `setStatus` that strictly raises restriction (Active < Frozen < Blocked), `blockBatch`, `placeHold`, and `setLimits` that raises neither of a bridge's limits | M_r signatures covering at least `rolesR` roles | Immediate; at most `restrictBudget` accounts restrained per epoch |
-| Slow (`queue` → `executeQueued`) | Everything else: unfreeze, unblock, release, seize, burn, any other target, and every configuration change | M_i > M_r signatures covering at least `rolesI` roles | Executable in [eta, eta + 14 days], eta = queue time + `delay` (≥ 1 h); a disjoint guardian quorum can cancel before execution; seized + burned value capped per epoch |
+| Slow (`queue` → `executeQueued`) | Everything else: unfreeze, unblock, release, seize, burn, any other target, and every configuration change | M_i > M_r signatures covering at least `rolesI` roles | Executable in [eta, eta + 14 days], eta = queue time + `delay` (≥ 1 h); a disjoint guardian quorum can cancel before execution; seized + burned value capped per epoch, for any target |
 
 Classification happens at execution time and fails closed: anything the fast tier does not recognise as restrictive is rejected there. Configuration (signer rotation, guardians, quorums, roles, delay, budgets) can only be changed by the authority itself, i.e. through the slow tier, and every change must leave a satisfiable policy with 1 ≤ M_r < M_i ≤ N, enough distinct roles, a non-empty guardian quorum and a delay of at least one hour. Signers and guardians are disjoint. The authority binds once to a token that names it as its authority; budgets and fast-tier classification apply to that token. Each signer is registered with a role and the hash of its HSM key attestation; events list the approving signers.
 
@@ -79,36 +79,37 @@ Measured transaction gas (fast tier 2-of-5, slow tier 3-of-5 over two roles, gua
 | Fast freeze, zero-balance account | 104,553 | 85,179 |
 | Fast freeze, funded account | 87,465 | 68,103 |
 | Fast place hold | 109,614 | 91,707 |
-| Slow seize: queue + execute | 88,584 + 60,684 | 73,289 (no delay) |
-| Slow unfreeze: queue + execute | 88,027 + 55,094 | 68,091 (no delay) |
+| Slow seize: queue + execute | 88,584 + 58,526 | 73,289 (no delay) |
+| Slow unfreeze: queue + execute | 88,027 + 52,936 | 68,091 (no delay) |
 | Guardian cancel (2-of-3) | 37,440 | — |
 
 The fast tier costs about 18,000–19,000 gas more per action than the single-threshold gate: it reads the target's current status to classify the action, updates the budget counter, and logs the approvers.
 
 Proved with Halmos (`test/TieredHalmos.t.sol`, `halmos --contract TieredProofs --loop 3`), with `ecrecover` abstracted so that every outcome of signature recovery is covered, and with the authority's and token's entire storage symbolic (including every slot the constructor wrote):
 
-- **T1** the fast tier only restricts: no status is lowered, no held amount reduced, no balance or supply changed, no existing hold touched, no bridge limit raised, nothing queued; it needs at least M_r approvals and stays within the restriction budget;
+- **T1** the fast tier only restricts: no status is lowered, no held amount reduced, no balance or supply changed, no existing hold touched, no bridge limit raised, nothing queued; it needs at least M_r approvals and stays within the restriction budget, which is charged one unit per restrained account (one per address of a `blockBatch`);
 - **T2** the fast tier rejects every other target and every non-restrictive selector;
 - **T3** queuing needs at least M_i approvals and sets eta = now + delay;
 - **T4** a queued action executes once, only within [eta, eta + grace];
 - **T5** a cancelled action never executes, and cancelling needs the guardian quorum;
-- **T6** seized plus burned value never exceeds the per-epoch value budget;
-- **T7** configuration changes only through the authority itself and always leaves a valid policy; signers and guardians stay disjoint.
+- **T6** seized plus burned value never exceeds the per-epoch value budget, whatever the target: the bound token, a token not yet bound, or any other contract;
+- **T7** configuration changes only through the authority itself and always leaves a valid policy; signers and guardians stay disjoint; and the signer, role and guardian counters behind the policy bounds change exactly with the membership they count, so the bounds refer to the real signer and guardian sets.
 
-Unit tests (`test/Tiered.t.sol`, 24 tests) cover each tier boundary, delay and grace, cancellation, both budgets and raising them, rotation with attestation hashes, role coverage, disjointness, token binding, and signatures after a chain-id change.
+Unit tests (`test/Tiered.t.sol`, 25 tests) cover each tier boundary, delay and grace, cancellation, both budgets and raising them, the value budget for a second or not-yet-bound token, rotation with attestation hashes, role coverage, disjointness, token binding, and signatures after a chain-id change.
 
 ## Cross-chain bridging
 
 `BridgedEnforcedToken` implements the bridge-facing part of [ERC-7281](https://github.com/ethereum/ERCs/blob/master/ERCS/erc-7281.md): the issuer deploys one canonical token per chain, and allow-listed bridges burn on the source chain and mint on the destination. No collateral is locked and no wrapped token is created, so value on every chain stays under the issuer's controls.
 
 - **Bridge-out** (`burn`) applies the outbound-transfer rules: the holder must be `ACTIVE`, only the spendable balance can leave (held value stays), and a `BLOCKED` bridge cannot burn.
-- **Bridge-in** (`mint` by a bridge) applies the inbound-transfer rule: no minting to a `BLOCKED` account. A `FROZEN` account can still receive.
+- **Bridge-in** (`mint` by a bridge) applies the inbound-transfer rule: no minting to a `BLOCKED` account. A `FROZEN` account can still receive. A `BLOCKED` bridge cannot mint, so blocking a bridge shuts it in both directions.
 - **Rate limits.** Each bridge has a minting limit and a burning limit that refill linearly over one day, as in ERC-7281. They bound what a compromised bridge or relayer can mint. Limits are set only by the authority, and each change is logged in the compliance hash chain.
 - **Changing limits through the tiered authority.** Lowering a limit, for example to 0 to shut a compromised bridge, is a fast-tier action. Raising one is a slow-tier action.
 
-ERC-7281 does not synchronize restrictions across chains. Each chain therefore has its own `TieredAuthority` with the same signer set, and signers sign one action per chain. The EIP-712 domain binds the chain id and the authority's address, so a signature cannot be replayed on another chain. The two-chain tests (`test/Bridge.t.sol`, 16 tests; chains simulated by switching `block.chainid`) show the following:
+ERC-7281 does not synchronize restrictions across chains. Each chain therefore has its own `TieredAuthority` with the same signer set, and signers sign one action per chain. The EIP-712 domain binds the chain id and the authority's address, so a signature cannot be replayed on another chain. The two-chain tests (`test/Bridge.t.sol`, 17 tests; chains simulated by switching `block.chainid`) show the following:
 - Supply is conserved across a round trip.
 - Holders who are frozen or blocked, and value under hold, cannot leave a chain.
+- A blocked bridge can neither burn nor mint.
 - Recipient status is enforced on arrival.
 - Allowances and allow-listing are required.
 - Rate limits refill over time.
@@ -122,13 +123,13 @@ Measured transaction gas ([`results/bridge.csv`](results/bridge.csv)):
 | Action | Tx gas |
 |---|---:|
 | Bridge-out through the adapter (burn) | 56,349 |
-| Bridge-in through the adapter (mint) | 45,330 |
+| Bridge-in through the adapter (mint) | 47,552 |
 | Plain transfer on the bridged token | 35,034 (same as `EnforcedToken`) |
 | Fast-tier bridge shutdown, 2-of-5 | 97,886 |
 
 Proved with Halmos (`test/BridgedHalmos.t.sol`, `halmos --contract BridgedProofs`). All twelve `EnforcedToken` checks are re-run against the bridged token. In addition:
 - **B1:** bridge-out happens only through an allow-listed, unblocked bridge within its burning limit. The holder is `ACTIVE`, at most the spendable balance leaves, held value and all other state are untouched, and supply falls by exactly the amount burned.
-- **B2:** bridge-in happens only through an allow-listed bridge within its minting limit, never to a `BLOCKED` account, and supply rises by exactly the amount minted.
+- **B2:** bridge-in happens only through an allow-listed, unblocked bridge within its minting limit, never to a `BLOCKED` account, and supply rises by exactly the amount minted.
 - **B3:** limits change only through the authority. Each change keeps the available value within the new maxima and appends exactly the specified log entry.
 
 `TieredProofs` additionally proves that the fast tier can never raise a bridge limit (`check_fastBridgeLimits`).
@@ -191,17 +192,18 @@ Proved symbolically with [Halmos](https://github.com/a16z/halmos) (`test/Halmos.
 
 The Halmos checks make the token's entire storage symbolic, so they quantify over all contract states. Each check assumes the invariant for the accounts a call touches, runs one public function with symbolic arguments and caller, and asserts that the invariant still holds and that state changed exactly as specified, including frame conditions that an arbitrary untouched account and an arbitrary other hold record are unchanged. Every state-changing public function is covered (`transfer`, `transferFrom`, `approve`, `mint`, `setStatus`, `blockBatch`, `placeHold`, `releaseHold`, `seize`, `burnFromHold`), and non-authorized callers are proved to be rejected by every compliance function, including `blockBatch`. Starting from the all-zero initial state, this is an inductive proof over all call sequences for invariants 1–4 and 6; each check also asserts that supply and the compliance log change only as specified (non-compliance calls leave the log untouched, and every compliance action appends exactly the specified entry to the head). For invariant 5, Halmos proves the token side (no caller other than the authority can change compliance state); signature verification in `ComplianceAuthority` is covered by unit tests only. `blockBatch` is checked for batches of one or two addresses.
 
-`scripts/mutation_check.py` confirms the proofs are not vacuous: it injects 34 bugs one at a time: ten into `EnforcedToken` (a frozen sender allowed to transfer; seizure not reducing the held amount; burning not reducing supply; holds not bounded by the spendable balance; a seizure that deletes a different hold record; `blockBatch` wiping the account's balance; an ordinary transfer advancing the compliance log; `blockBatch` callable without the authority; a seizure logged without its evidence hash; a release logged under the wrong action tag) nine into `BridgedEnforcedToken` (each of B1–B3 has at least one), and fifteen into `TieredAuthority` (each of T1–T7 has at least one), and requires a Halmos counterexample for each.
+`scripts/mutation_check.py` confirms the proofs are not vacuous: it injects 41 bugs one at a time: ten into `EnforcedToken` (a frozen sender allowed to transfer; seizure not reducing the held amount; burning not reducing supply; holds not bounded by the spendable balance; a seizure that deletes a different hold record; `blockBatch` wiping the account's balance; an ordinary transfer advancing the compliance log; `blockBatch` callable without the authority; a seizure logged without its evidence hash; a release logged under the wrong action tag) ten into `BridgedEnforcedToken` (each of B1–B3 has at least one), and twenty-one into `TieredAuthority` (each of T1–T7 has at least one, including a `blockBatch` charged as a single account, a value budget that counts only the bound token, and four errors in the signer, role and guardian counters), and requires a Halmos counterexample for each.
 
 ```bash
 pip install halmos==0.3.3
 make prove          # token, bridged-token and tiered-authority proofs  (~2.5 min)
-make mutate         # 34 injected bugs, each must yield a counterexample (~12 min)
+make mutate         # 41 injected bugs, each must yield a counterexample (~15 min)
 ```
 
 ## Repository layout
 
 ```
+├── .github/workflows/ci.yml  CI: re-runs tests, benchmarks, data, proofs and mutation check
 ├── src/                      Solidity contracts
 ├── test/
 │   ├── Bench.t.sol           gas benchmarks → results/*.csv
@@ -247,6 +249,13 @@ make data     # optional: regenerate SMT trees and proofs (~2 min)
 ```
 
 If you cloned without `--recursive`, run `git submodule update --init` first.
+
+### Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request, with Foundry v1.5.1 and Halmos 0.3.3:
+
+- **reproduce**: `make test`, `make tools`, `make ingest`, `make bench` and `make data`. The job then fails unless `results/*.csv`, `data/ingest/` and `data/smt_*.json` are byte-identical to the committed files.
+- **proofs**: `make prove` and `make mutate`. The job fails if any proof fails or any injected bug survives.
 
 ### Measurement notes
 

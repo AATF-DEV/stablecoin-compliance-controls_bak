@@ -1,0 +1,12 @@
+# Foundry build output
+out/
+cache/
+broadcast/
+
+# Python
+__pycache__/
+*.pyc
+
+# Figures written by `make plot` into results/ (the committed figure lives in docs/)
+results/*.pdf
+results/*.png

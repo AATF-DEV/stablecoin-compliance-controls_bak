@@ -1,0 +1,96 @@
+# Re-runs everything the paper reports and fails unless the committed data reproduce exactly.
+#
+#   reproduce: unit tests and invariant fuzzing, ingestion-tool tests, the on-chain ingestion demo,
+#              the gas benchmarks and the SMT data. results/*.csv, data/ingest/ and data/smt_*.json
+#              are regenerated and must be byte-identical to the committed files.
+#   proofs:    the three Halmos suites and the mutation (non-vacuity) check.
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FOUNDRY_VERSION: v1.5.1
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Toolchain versions
+        run: |
+          forge --version
+          python3 --version
+
+      - name: Build
+        run: forge build
+
+      - name: Unit tests and invariant fuzzing
+        run: make test
+
+      - name: Ingestion tool tests
+        run: make tools
+
+      - name: Ingestion demo (regenerate and execute on-chain)
+        run: make ingest
+
+      - name: Gas benchmarks
+        run: make bench
+
+      - name: SMT trees and proofs
+        run: make data
+
+      - name: Committed data must reproduce exactly
+        run: |
+          git status --short results data
+          git diff --exit-code -- results data
+          test -z "$(git status --porcelain --untracked-files=all -- results data)"
+
+  proofs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Halmos
+        run: pip install halmos==0.3.3
+
+      - name: Symbolic proofs (token, bridged token, tiered authority)
+        run: make prove
+
+      - name: Non-vacuity (every injected bug must yield a counterexample)
+        run: make mutate
+
+      - name: Sources restored after mutation
+        run: git diff --exit-code -- src
