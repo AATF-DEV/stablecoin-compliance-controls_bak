@@ -284,6 +284,7 @@ class OnChain(Base):
     def setUp(self):
         super().setUp()
         self.node = subprocess.Popen(["anvil", "--port", self.PORT, "--silent"], start_new_session=True)
+        self.addCleanup(self._stop_node)  # runs even if the rest of setUp fails
         self.rpc = f"http://127.0.0.1:{self.PORT}"
         for _ in range(100):
             if subprocess.run(["cast", "chain-id", "--rpc-url", self.rpc], capture_output=True).returncode == 0:
@@ -291,15 +292,15 @@ class OnChain(Base):
             time.sleep(0.1)
         r = subprocess.run(
             ["forge", "create", "src/EnforcedToken.sol:EnforcedToken", "--rpc-url", self.rpc, "--private-key", self.KEY,
-             "--broadcast", "--constructor-args", self.ACCT],  # authority = account 0, a plain key for this test
+             "--broadcast", "--constructor-args", self.ACCT, "[]"],  # authority = account 0 (a plain key
+            # for this test), no custody accounts
             cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.token = next(l.split()[-1] for l in r.stdout.splitlines() if "Deployed to" in l)
 
-    def tearDown(self):
+    def _stop_node(self):
         os.killpg(self.node.pid, signal.SIGTERM)
         self.node.wait()
-        super().tearDown()
 
     def _block(self, a: str):
         r = subprocess.run(["cast", "send", self.token, "setStatus(address,uint8,bytes32)", a, "2", "0x" + "00" * 32,

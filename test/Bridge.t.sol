@@ -55,7 +55,7 @@ contract Bridge is Test {
         for (uint256 i; i < 3; ++i) g[i] = vm.addr(gpk[i]);
         c.id = chainId;
         c.a = new TieredAuthority(s, roles, att, g, _policy());
-        c.t = new BridgedEnforcedToken(address(c.a));
+        c.t = new BridgedEnforcedToken(address(c.a), new address[](0));
         c.a.bindToken(address(c.t));
         c.bridge = new XChainAdapter(IXERC20(address(c.t)), relayer);
     }

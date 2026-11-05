@@ -44,7 +44,7 @@ contract BridgedEnforcedToken is EnforcedToken {
     error NotBridge();
     error LimitExceeded();
 
-    constructor(address authority_) EnforcedToken(authority_) {}
+    constructor(address authority_, address[] memory custodians) EnforcedToken(authority_, custodians) {}
 
     // ================================================================ ERC-7281 bridge interface
     /// @notice Primary issuance by the minter (unlimited, as in EnforcedToken), or bridge-in by an

@@ -29,7 +29,9 @@ contract Security is Test {
             }
         }
         a = new ComplianceAuthority(addrs, 2);
-        t = new EnforcedToken(address(a));
+        address[] memory custodians = new address[](1);
+        custodians[0] = bob; // the seizure destination used below
+        t = new EnforcedToken(address(a), custodians);
         t.mint(alice, 1000);
         t.mint(bob, 10);
     }
@@ -108,6 +110,8 @@ contract Security is Test {
         vm.expectRevert(EnforcedToken.NotAuthority.selector);
         t.seize(keccak256("x"), 1, bob, EV);
         vm.expectRevert(EnforcedToken.NotAuthority.selector);
+        t.setCustody(alice, true, EV);
+        vm.expectRevert(EnforcedToken.NotAuthority.selector);
         t.placeHold(keccak256("x"), alice, 1, EV);
         vm.expectRevert(EnforcedToken.NotAuthority.selector);
         t.releaseHold(keccak256("x"), EV);
@@ -157,6 +161,39 @@ contract Security is Test {
         t.transfer(bob, 101);
         t.transfer(bob, 100);
         vm.stopPrank();
+    }
+
+    /// Seizure credits only a designated custody account; the list changes only through the quorum.
+    function test_seizeOnlyToCustody() public {
+        _act(abi.encodeCall(EnforcedToken.placeHold, (keccak256("h"), alice, 50, EV)));
+        bytes memory toAlice = abi.encodeCall(EnforcedToken.seize, (keccak256("h"), 10, alice, EV));
+        bytes memory sg = _sigs(toAlice, a.nonce(), _two());
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ComplianceAuthority.CallFailed.selector, abi.encodeWithSelector(EnforcedToken.NotCustody.selector, alice)
+            )
+        );
+        a.execute(address(t), toAlice, EV, block.timestamp + 1, sg);
+
+        _act(abi.encodeCall(EnforcedToken.setCustody, (alice, true, EV)));
+        assertTrue(t.isCustody(alice));
+        _act(toAlice);
+        assertEq(t.heldOf(alice), 40);
+
+        _act(abi.encodeCall(EnforcedToken.setCustody, (alice, false, EV)));
+        sg = _sigs(toAlice, a.nonce(), _two());
+        vm.expectRevert();
+        a.execute(address(t), toAlice, EV, block.timestamp + 1, sg);
+    }
+
+    function test_custodyNeverZeroAddress() public {
+        bytes memory data = abi.encodeCall(EnforcedToken.setCustody, (address(0), true, EV));
+        bytes memory sg = _sigs(data, a.nonce(), _two());
+        vm.expectRevert();
+        a.execute(address(t), data, EV, block.timestamp + 1, sg);
+        address[] memory zero = new address[](1);
+        vm.expectRevert(abi.encodeWithSelector(EnforcedToken.NotCustody.selector, address(0)));
+        new EnforcedToken(address(a), zero);
     }
 
     function test_seizeRequiresHold() public {

@@ -42,7 +42,7 @@ contract Ingest is Test {
                 valueBudget: 0
             })
         );
-        t = new EnforcedToken(address(a));
+        t = new EnforcedToken(address(a), new address[](0));
         a.bindToken(address(t));
     }
 

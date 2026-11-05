@@ -26,14 +26,14 @@ All values are full transaction gas (base cost + calldata + execution − capped
 
 | Compliance action (2-of-3 quorum unless noted) | Tx gas |
 |---|---:|
-| Freeze, single key (zero-balance account) | 57,633 |
-| Freeze, 2-of-4 quorum (zero-balance account) | 85,179 |
+| Freeze, single key (zero-balance account) | 57,611 |
+| Freeze, 2-of-4 quorum (zero-balance account) | 85,157 |
 | Each additional required signer | ≈ +6,750 |
-| Freeze / unfreeze (funded account) | 68,103 / 68,091 |
-| Place hold | 91,707 |
-| Seize full hold | 73,289 |
+| Freeze / unfreeze (funded account) | 68,081 / 68,069 |
+| Place hold | 91,752 |
+| Seize full hold (to a custody account) | 75,476 |
 | Burn part of a hold | 81,941 |
-| Release hold | 64,097 |
+| Release hold | 64,142 |
 | Update SMT root (any batch size) | ≈ 55,450 |
 
 Batch blocking through a separate mapping exceeds the EIP-7825 per-transaction cap (2²⁴ = 16,777,216 gas) at roughly **690 addresses** per transaction. Raw data is in [`results/`](results/).
@@ -42,7 +42,7 @@ Batch blocking through a separate mapping exceeds the EIP-7825 per-transaction c
 
 | Contract | Role |
 |---|---|
-| [`EnforcedToken`](src/EnforcedToken.sol) | **Proposed design.** Each account's balance (`uint128`), aggregate held amount (`uint120`), and status (`uint8`) share one storage slot, so a transfer reads compliance state at no extra storage cost. Holds are individually identified records. Seize and burn can only debit an existing hold (two-phase enforcement). Every compliance action extends a hash-chained audit log. |
+| [`EnforcedToken`](src/EnforcedToken.sol) | **Proposed design.** Each account's balance (`uint128`), aggregate held amount (`uint120`), and status (`uint8`) share one storage slot, so a transfer reads compliance state at no extra storage cost. Holds are individually identified records. Seize and burn can only debit an existing hold (two-phase enforcement), and seize can only credit a designated custody account (`isCustody`, set at deployment and changed only by the authority). Every compliance action extends a hash-chained audit log. |
 | [`ComplianceAuthority`](src/ComplianceAuthority.sol) | M-of-N signature quorum over an EIP-712 digest that binds the target, exact calldata, an evidence hash (e.g. a reference to a lawful order), a nonce, and a deadline. It is the only address allowed to change compliance state. |
 | [`BridgedEnforcedToken`](src/BridgedEnforcedToken.sol) | `EnforcedToken` plus the ERC-7281 bridge interface for issuer-controlled burn-and-mint bridging: bridge-out and bridge-in apply the same compliance checks as transfers, and each allow-listed bridge has rate-limited minting and burning. See [Cross-chain bridging](#cross-chain-bridging). |
 | [`XChainAdapter`](src/XChainAdapter.sol) | Minimal allow-listed bridge adapter used in the two-chain tests and benchmarks. |
@@ -67,8 +67,8 @@ Account states:
 
 | Tier | Actions | Authorization | Timing |
 |---|---|---|---|
-| Fast (`execute`) | Restrictive and reversible only: `setStatus` that strictly raises restriction (Active < Frozen < Blocked), `blockBatch`, `placeHold`, and `setLimits` that raises neither of a bridge's limits | M_r signatures covering at least `rolesR` roles | Immediate; at most `restrictBudget` accounts restrained per epoch |
-| Slow (`queue` → `executeQueued`) | Everything else: unfreeze, unblock, release, seize, burn, any other target, and every configuration change | M_i > M_r signatures covering at least `rolesI` roles | Executable in [eta, eta + 14 days], eta = queue time + `delay` (≥ 1 h); a disjoint guardian quorum can cancel before execution; seized + burned value capped per epoch, for any target |
+| Fast (`execute`) | Restrictive and reversible only: `setStatus` that strictly raises restriction (Active < Frozen < Blocked), `blockBatch`, `placeHold`, `setLimits` that raises neither of a bridge's limits, and `setCustody` that removes a custody account | M_r signatures covering at least `rolesR` roles | Immediate; at most `restrictBudget` accounts restrained per epoch |
+| Slow (`queue` → `executeQueued`) | Everything else: unfreeze, unblock, release, seize, burn, adding a custody account, any other target, and every configuration change | M_i > M_r signatures covering at least `rolesI` roles | Executable in [eta, eta + 14 days], eta = queue time + `delay` (≥ 1 h); a disjoint guardian quorum can cancel before execution; seized + burned value capped per epoch, for any target |
 
 Classification happens at execution time and fails closed: anything the fast tier does not recognise as restrictive is rejected there. Configuration (signer rotation, guardians, quorums, roles, delay, budgets) can only be changed by the authority itself, i.e. through the slow tier, and every change must leave a satisfiable policy with 1 ≤ M_r < M_i ≤ N, enough distinct roles, a non-empty guardian quorum and a delay of at least one hour. Signers and guardians are disjoint. The authority binds once to a token that names it as its authority; budgets and fast-tier classification apply to that token. Each signer is registered with a role and the hash of its HSM key attestation; events list the approving signers.
 
@@ -76,11 +76,11 @@ Measured transaction gas (fast tier 2-of-5, slow tier 3-of-5 over two roles, gua
 
 | Action | Tx gas | Same action via `ComplianceAuthority` (2-of-N) |
 |---|---:|---:|
-| Fast freeze, zero-balance account | 104,553 | 85,179 |
-| Fast freeze, funded account | 87,465 | 68,103 |
-| Fast place hold | 109,614 | 91,707 |
-| Slow seize: queue + execute | 88,584 + 58,526 | 73,289 (no delay) |
-| Slow unfreeze: queue + execute | 88,027 + 52,936 | 68,091 (no delay) |
+| Fast freeze, zero-balance account | 104,531 | 85,157 |
+| Fast freeze, funded account | 87,443 | 68,081 |
+| Fast place hold | 109,659 | 91,752 |
+| Slow seize: queue + execute | 88,584 + 60,713 | 75,476 (no delay) |
+| Slow unfreeze: queue + execute | 88,027 + 52,914 | 68,069 (no delay) |
 | Guardian cancel (2-of-3) | 37,440 | — |
 
 The fast tier costs about 18,000–19,000 gas more per action than the single-threshold gate: it reads the target's current status to classify the action, updates the budget counter, and logs the approvers.
@@ -95,7 +95,7 @@ Proved with Halmos (`test/TieredHalmos.t.sol`, `halmos --contract TieredProofs -
 - **T6** seized plus burned value never exceeds the per-epoch value budget, whatever the target: the bound token, a token not yet bound, or any other contract;
 - **T7** configuration changes only through the authority itself and always leaves a valid policy; signers and guardians stay disjoint; and the signer, role and guardian counters behind the policy bounds change exactly with the membership they count, so the bounds refer to the real signer and guardian sets.
 
-Unit tests (`test/Tiered.t.sol`, 25 tests) cover each tier boundary, delay and grace, cancellation, both budgets and raising them, the value budget for a second or not-yet-bound token, rotation with attestation hashes, role coverage, disjointness, token binding, and signatures after a chain-id change.
+Unit tests (`test/Tiered.t.sol`, 26 tests) cover each tier boundary, adding and removing custody accounts, delay and grace, cancellation, both budgets and raising them, the value budget for a second or not-yet-bound token, rotation with attestation hashes, role coverage, disjointness, token binding, and signatures after a chain-id change.
 
 ## Cross-chain bridging
 
@@ -125,7 +125,7 @@ Measured transaction gas ([`results/bridge.csv`](results/bridge.csv)):
 | Bridge-out through the adapter (burn) | 56,349 |
 | Bridge-in through the adapter (mint) | 47,552 |
 | Plain transfer on the bridged token | 35,034 (same as `EnforcedToken`) |
-| Fast-tier bridge shutdown, 2-of-5 | 97,886 |
+| Fast-tier bridge shutdown, 2-of-5 | 97,953 |
 
 Proved with Halmos (`test/BridgedHalmos.t.sol`, `halmos --contract BridgedProofs`). All twelve `EnforcedToken` checks are re-run against the bridged token. In addition:
 - **B1:** bridge-out happens only through an allow-listed, unblocked bridge within its burning limit. The holder is `ACTIVE`, at most the spendable balance leaves, held value and all other state are untouched, and supply falls by exactly the amount burned. A bridge other than the holder spends exactly the amount from the holder's finite allowance.
@@ -183,21 +183,21 @@ Notes:
 
 Proved symbolically with [Halmos](https://github.com/a16z/halmos) (`test/Halmos.t.sol`), and additionally checked by stateful fuzzing (`test/Invariants.t.sol`, 256 runs × depth 64 = 16,384 random calls per invariant) and unit tests (`test/Security.t.sol`):
 
-1. **Hold precedence**: seize and burn debit exactly the requested amount from an existing active hold.
+1. **Hold precedence**: seize and burn debit exactly the requested amount from an existing active hold; seize credits only a designated custody account.
 2. **Spendable-balance safety**: an account's held amount equals the sum of its active holds and never exceeds its balance.
 3. **Freeze safety**: no user-initiated transfer reduces the balance of a frozen or blocked account.
 4. **Supply conservation**: total supply equals minted minus burned-from-holds and equals the sum of balances.
 5. **Quorum**: compliance actions require M valid signatures from distinct registered signers. Unit tests cover too few signatures, duplicates, outsiders, replay, tampered calldata, and direct calls.
 6. **Log completeness**: every compliance action extends the hash-chained log by exactly one entry, and the new head is the specified hash of that entry.
 
-The Halmos checks make the token's entire storage symbolic, so they quantify over all contract states. Each check assumes the invariant for the accounts a call touches, runs one public function with symbolic arguments and caller, and asserts that the invariant still holds and that state changed exactly as specified, including frame conditions that an arbitrary untouched account, an arbitrary other hold record and an arbitrary other allowance entry are unchanged. Allowance bookkeeping is specified exactly: `transferFrom` spends exactly the amount of a finite allowance and keeps an infinite one, and `approve` sets exactly one entry. Every state-changing public function is covered (`transfer`, `transferFrom`, `approve`, `mint`, `setStatus`, `blockBatch`, `placeHold`, `releaseHold`, `seize`, `burnFromHold`), and non-authorized callers are proved to be rejected by every compliance function, including `blockBatch`. Starting from the all-zero initial state, this is an inductive proof over all call sequences for invariants 1–4 and 6; each check also asserts that supply and the compliance log change only as specified (non-compliance calls leave the log untouched, and every compliance action appends exactly the specified entry to the head). For invariant 5, Halmos proves the token side (no caller other than the authority can change compliance state); signature verification in `ComplianceAuthority` is covered by unit tests only. `blockBatch` is checked for batches of one or two addresses.
+The Halmos checks make the token's entire storage symbolic, so they quantify over all contract states. Each check assumes the invariant for the accounts a call touches, runs one public function with symbolic arguments and caller, and asserts that the invariant still holds and that state changed exactly as specified, including frame conditions that an arbitrary untouched account, an arbitrary other hold record, an arbitrary other allowance entry and an arbitrary other custody-list entry are unchanged. `setCustody` changes exactly one entry (never for address 0) and is logged. Allowance bookkeeping is specified exactly: `transferFrom` spends exactly the amount of a finite allowance and keeps an infinite one, and `approve` sets exactly one entry. Every state-changing public function is covered (`transfer`, `transferFrom`, `approve`, `mint`, `setStatus`, `blockBatch`, `placeHold`, `releaseHold`, `seize`, `burnFromHold`, `setCustody`), and non-authorized callers are proved to be rejected by every compliance function, including `blockBatch` and `setCustody`. Starting from the initial state (no balances, holds or log entries; only the deployment's custody list), this is an inductive proof over all call sequences for invariants 1–4 and 6; each check also asserts that supply and the compliance log change only as specified (non-compliance calls leave the log untouched, and every compliance action appends exactly the specified entry to the head). For invariant 5, Halmos proves the token side (no caller other than the authority can change compliance state); signature verification in `ComplianceAuthority` is covered by unit tests only. `blockBatch` is checked for batches of one or two addresses.
 
-`scripts/mutation_check.py` confirms the proofs are not vacuous: it injects 49 bugs one at a time: thirteen into `EnforcedToken` (a frozen sender allowed to transfer; seizure not reducing the held amount; burning not reducing supply; holds not bounded by the spendable balance; a seizure that deletes a different hold record; `blockBatch` wiping the account's balance; an ordinary transfer advancing the compliance log; `blockBatch` callable without the authority; a seizure logged without its evidence hash; a release logged under the wrong action tag; three allowance errors in `transferFrom` and `approve`), twelve into `BridgedEnforcedToken` (each of B1–B3 has at least one, including two allowance errors in bridge-out), and twenty-four into `TieredAuthority` (each of T1–T7 has at least one, including a `blockBatch` charged as a single account, a value budget that counts only the bound token, three role-coverage errors, and four errors in the signer, role and guardian counters), and requires a Halmos counterexample for each.
+`scripts/mutation_check.py` confirms the proofs are not vacuous: it injects 54 bugs one at a time: seventeen into `EnforcedToken` (a frozen sender allowed to transfer; seizure not reducing the held amount; burning not reducing supply; holds not bounded by the spendable balance; a seizure that deletes a different hold record; `blockBatch` wiping the account's balance; an ordinary transfer advancing the compliance log; `blockBatch` callable without the authority; a seizure logged without its evidence hash; a release logged under the wrong action tag; three allowance errors in `transferFrom` and `approve`; four custody-list errors), twelve into `BridgedEnforcedToken` (each of B1–B3 has at least one, including two allowance errors in bridge-out), and twenty-five into `TieredAuthority` (each of T1–T7 has at least one, including a fast tier that accepts adding a custody account, a `blockBatch` charged as a single account, a value budget that counts only the bound token, three role-coverage errors, and four errors in the signer, role and guardian counters), and requires a Halmos counterexample for each.
 
 ```bash
 pip install halmos==0.3.3
-make prove          # token, bridged-token and tiered-authority proofs  (~5 min)
-make mutate         # 49 injected bugs, each must yield a counterexample (~60 min on one core)
+make prove          # token, bridged-token and tiered-authority proofs  (~8 min)
+make mutate         # 54 injected bugs, each must yield a counterexample (~90 min on two cores)
 ```
 
 ## Repository layout
@@ -256,7 +256,7 @@ If you cloned without `--recursive`, run `git submodule update --init` first.
 
 - **reproduce**: `make test`, `make tools`, `make ingest`, `make bench` and `make data`. The job then fails unless `results/*.csv`, `data/ingest/` and `data/smt_*.json` are byte-identical to the committed files.
 - **proofs**: `make prove`. The job fails if any proof fails.
-- **mutate**: the mutation check in four parallel shards (`scripts/mutation_check.py --shard I/4`). A shard fails if any of its injected bugs survives, or if any mutant's pattern no longer matches the sources.
+- **mutate**: the mutation check in six parallel shards (`scripts/mutation_check.py --shard I/6`). A shard fails if any of its injected bugs survives, or if any mutant's pattern no longer matches the sources.
 
 ### Measurement notes
 

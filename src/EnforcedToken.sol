@@ -10,6 +10,9 @@ pragma solidity 0.8.28;
 ///   * Holds are individually identified records (CO-4). SEIZE and BURN can only
 ///     debit an existing active hold (CO-3, two-phase irreversibility).
 ///   * Every compliance mutation extends a hash-chained log head (CO-6).
+///   * SEIZE can only credit a designated custody account. The custody list is fixed at deployment
+///     and changed only by `authority` (each change logged), so an irreversible seizure cannot
+///     send value to a mistyped or look-alike address (A5).
 ///   * Only `authority` (a ComplianceAuthority quorum, CO-8) can mutate compliance state.
 contract EnforcedToken {
     // ---------------------------------------------------------------- types
@@ -35,6 +38,7 @@ contract EnforcedToken {
     uint256 public totalSupply;
     bytes32 public logHead;
     uint256 public logCount;
+    mapping(address => bool) public isCustody; // designated seizure destinations
 
     address public immutable authority;
     address public immutable minter;
@@ -42,6 +46,7 @@ contract EnforcedToken {
     // ---------------------------------------------------------------- events
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
+    event CustodySet(address indexed account, bool allowed);
     event ComplianceAction(
         uint256 indexed seq, uint8 indexed action, bytes32 paramsHash, bytes32 evidenceHash, bytes32 newHead
     );
@@ -53,6 +58,7 @@ contract EnforcedToken {
     uint8 internal constant A_SEIZE = 4;
     uint8 internal constant A_BURN = 5;
     uint8 internal constant A_BATCH_BLOCK = 6;
+    uint8 internal constant A_CUSTODY = 8; // 7 is A_LIMITS in BridgedEnforcedToken
 
     // ---------------------------------------------------------------- errors
     error Restricted(address account);
@@ -65,15 +71,22 @@ contract EnforcedToken {
     error ExceedsHold();
     error BadStatus();
     error Overflow();
+    error NotCustody(address account);
 
     modifier onlyAuthority() {
         if (msg.sender != authority) revert NotAuthority();
         _;
     }
 
-    constructor(address authority_) {
+    /// @param custodians initial custody accounts: the only addresses `seize` can credit.
+    constructor(address authority_, address[] memory custodians) {
         authority = authority_;
         minter = msg.sender;
+        for (uint256 i; i < custodians.length; ++i) {
+            if (custodians[i] == address(0)) revert NotCustody(address(0));
+            isCustody[custodians[i]] = true;
+            emit CustodySet(custodians[i], true);
+        }
     }
 
     // ================================================================ ERC-20
@@ -179,8 +192,9 @@ contract EnforcedToken {
         _log(A_RELEASE, keccak256(abi.encode(id)), evidenceHash);
     }
 
-    /// @notice SEIZE: move `amt` out of an existing hold to `dest`. Irreversible.
+    /// @notice SEIZE: move `amt` out of an existing hold to the custody account `dest`. Irreversible.
     function seize(bytes32 id, uint96 amt, address dest, bytes32 evidenceHash) external onlyAuthority {
+        if (!isCustody[dest]) revert NotCustody(dest);
         address a = _debitHold(id, amt);
         Account storage d = _acct[dest];
         if (d.status == BLOCKED) revert Restricted(dest);
@@ -198,6 +212,15 @@ contract EnforcedToken {
         totalSupply -= amt;
         emit Transfer(a, address(0), amt);
         _log(A_BURN, keccak256(abi.encode(id, amt)), evidenceHash);
+    }
+
+    /// @notice Add (`allowed`) or remove a designated custody account. Adding a destination for
+    ///         irreversible transfers is permissive (slow tier); removing one is restrictive.
+    function setCustody(address a, bool allowed, bytes32 evidenceHash) external onlyAuthority {
+        if (a == address(0)) revert NotCustody(address(0));
+        isCustody[a] = allowed;
+        emit CustodySet(a, allowed);
+        _log(A_CUSTODY, keccak256(abi.encode(a, allowed)), evidenceHash);
     }
 
     function _debitHold(bytes32 id, uint96 amt) internal returns (address a) {

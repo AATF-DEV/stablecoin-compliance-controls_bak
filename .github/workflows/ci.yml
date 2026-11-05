@@ -4,7 +4,7 @@
 #              the gas benchmarks and the SMT data. results/*.csv, data/ingest/ and data/smt_*.json
 #              are regenerated and must be byte-identical to the committed files.
 #   proofs:    the three Halmos suites.
-#   mutate:    the mutation (non-vacuity) check, in four parallel shards.
+#   mutate:    the mutation (non-vacuity) check, in six parallel shards.
 name: ci
 
 on:
@@ -90,15 +90,15 @@ jobs:
       - name: Symbolic proofs (token, bridged token, tiered authority)
         run: make prove
 
-  # The mutation check runs one Halmos check per injected bug (~60 min on one core), so it is
-  # split into four shards that run in parallel. Each shard first verifies every mutant's pattern.
+  # The mutation check runs one Halmos check per injected bug (~90 min on two cores), so it is
+  # split into six shards that run in parallel. Each shard first verifies every mutant's pattern.
   mutate:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -115,8 +115,8 @@ jobs:
       - name: Halmos
         run: pip install halmos==0.3.3
 
-      - name: Non-vacuity, shard ${{ matrix.shard }} of 4 (every injected bug must yield a counterexample)
-        run: python3 scripts/mutation_check.py --shard ${{ matrix.shard }}/4
+      - name: Non-vacuity, shard ${{ matrix.shard }} of 6 (every injected bug must yield a counterexample)
+        run: python3 scripts/mutation_check.py --shard ${{ matrix.shard }}/6
 
       - name: Sources restored after mutation
         run: git diff --exit-code -- src

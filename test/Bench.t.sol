@@ -74,6 +74,11 @@ contract Bench is Test {
     }
 
     // quorum helpers ------------------------------------------------------
+    function _one(address x) internal pure returns (address[] memory r) {
+        r = new address[](1);
+        r[0] = x;
+    }
+
     function _signers(uint256 n) internal pure returns (uint256[] memory pks, address[] memory addrs) {
         pks = new uint256[](n);
         addrs = new address[](n);
@@ -181,7 +186,7 @@ contract Bench is Test {
         }
         for (uint256 x; x < ks.length; ++x) {
             uint256 k = ks[x];
-            EnforcedToken t = new EnforcedToken(address(this));
+            EnforcedToken t = new EnforcedToken(address(this), new address[](0));
             t.mint(alice, 1_000_000e6);
             t.mint(bob, 1e6);
             for (uint256 i; i < k; ++i) t.placeHold(keccak256(abi.encode(k, i)), alice, 1e6, EV);
@@ -230,7 +235,7 @@ contract Bench is Test {
         bytes memory data = abi.encodeCall(EnforcedToken.setStatus, (bob, 1, EV));
         {
             address key = address(0xC0FFEE);
-            EnforcedToken t = new EnforcedToken(key);
+            EnforcedToken t = new EnforcedToken(key, new address[](0));
             vm.prank(key);
             t.setStatus(address(0xDEAD), 2, EV); // warm-up
             vm.prank(key);
@@ -239,7 +244,7 @@ contract Bench is Test {
         }
         for (uint256 m = 1; m <= 5; ++m) {
             (ComplianceAuthority a, uint256[] memory pks) = _authority(m, m + 2);
-            EnforcedToken t = new EnforcedToken(address(a));
+            EnforcedToken t = new EnforcedToken(address(a), new address[](0));
             _warm(a, pks, m, address(t), WARM_ENF());
             bytes memory cd = _execCalldata(a, pks, m, address(t), data);
             _exec(a, cd);
@@ -280,7 +285,7 @@ contract Bench is Test {
             // (2) packed status, targets already hold a balance: non-zero -> non-zero SSTORE
             {
                 (ComplianceAuthority a, uint256[] memory pks) = _authority(2, 3);
-                EnforcedToken t = new EnforcedToken(address(a));
+                EnforcedToken t = new EnforcedToken(address(a), new address[](0));
                 for (uint256 i; i < k; ++i) t.mint(xs[i], 1e6);
                 _warm(a, pks, 2, address(t), WARM_ENF());
                 bytes memory cd = _execCalldata(a, pks, 2, address(t), abi.encodeCall(EnforcedToken.blockBatch, (xs, EV)));
@@ -291,7 +296,7 @@ contract Bench is Test {
             // (2b) packed status, targets with no balance: zero -> non-zero SSTORE
             {
                 (ComplianceAuthority a, uint256[] memory pks) = _authority(2, 3);
-                EnforcedToken t = new EnforcedToken(address(a));
+                EnforcedToken t = new EnforcedToken(address(a), new address[](0));
                 _warm(a, pks, 2, address(t), WARM_ENF());
                 bytes memory cd = _execCalldata(a, pks, 2, address(t), abi.encodeCall(EnforcedToken.blockBatch, (xs, EV)));
                 _exec(a, cd);
@@ -317,8 +322,8 @@ contract Bench is Test {
         string memory f = "results/lifecycle.csv";
         _header(f);
         (ComplianceAuthority a, uint256[] memory pks) = _authority(2, 3);
-        EnforcedToken t = new EnforcedToken(address(a));
         address treasury = address(0x7EA5);
+        EnforcedToken t = new EnforcedToken(address(a), _one(treasury));
         t.mint(alice, 1_000_000e6);
         t.mint(treasury, 1e6);
         _warm(a, pks, 2, address(t), WARM_ENF());
@@ -454,9 +459,9 @@ contract Bench is Test {
         _header(f);
         vm.warp(1_800_000_000);
         (TieredAuthority a, uint256[] memory spk, uint256[] memory gpk) = _tiered();
-        EnforcedToken t = new EnforcedToken(address(a));
-        a.bindToken(address(t));
         address treasury = address(0x7EA5);
+        EnforcedToken t = new EnforcedToken(address(a), _one(treasury));
+        a.bindToken(address(t));
         t.mint(alice, 1_000_000e6);
         t.mint(treasury, 1e6);
         _call(address(a), _fastCd(a, address(t), WARM_ENF(), _pick(spk, 0, 1))); // warm-up
@@ -518,7 +523,7 @@ contract Bench is Test {
         _header(f);
         vm.warp(1_800_000_000);
         (TieredAuthority a, uint256[] memory spk,) = _tiered();
-        BridgedEnforcedToken t = new BridgedEnforcedToken(address(a));
+        BridgedEnforcedToken t = new BridgedEnforcedToken(address(a), new address[](0));
         a.bindToken(address(t));
         XChainAdapter br = new XChainAdapter(IXERC20(address(t)), address(this));
         t.mint(alice, 1_000_000e6);

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Non-vacuity check for the Halmos proofs.
 
-Injects bugs one at a time (thirteen into src/EnforcedToken.sol, twelve into
-src/BridgedEnforcedToken.sol, twenty-four into src/TieredAuthority.sol),
+Injects bugs one at a time (seventeen into src/EnforcedToken.sol, twelve into
+src/BridgedEnforcedToken.sol, twenty-five into src/TieredAuthority.sol),
 runs the relevant Halmos check, and requires a counterexample. The original sources are always
 restored, even on error.
 
 Usage (from the repository root):
-  python3 scripts/mutation_check.py                 all mutants (~60 min on one core)
+  python3 scripts/mutation_check.py                 all mutants (~90 min on two cores)
   python3 scripts/mutation_check.py budget          only mutants whose name contains "budget"
-  python3 scripts/mutation_check.py --shard 2/4     every 4th mutant starting at index 2 (CI runs 4 shards)
+  python3 scripts/mutation_check.py --shard 2/6     every 6th mutant starting at index 2 (CI runs 6 shards)
 Every mutant's pattern is checked before anything runs, whatever the filter or shard.
 Exit code 0 iff every selected mutant is killed.
 """
@@ -59,6 +59,16 @@ MUTANTS = [
      "allowance[from][msg.sender] = a - amt;"),
     (TOKEN, "approve writes the wrong allowance entry", "check_approve",
      "allowance[msg.sender][spender] = amt;", "allowance[spender][msg.sender] = amt;"),
+    (TOKEN, "seize ignores the custody list", "check_seize",
+     "        if (!isCustody[dest]) revert NotCustody(dest);\n", ""),
+    (TOKEN, "setCustody callable without the authority", "check_onlyAuthority",
+     "function setCustody(address a, bool allowed, bytes32 evidenceHash) external onlyAuthority {",
+     "function setCustody(address a, bool allowed, bytes32 evidenceHash) external {"),
+    (TOKEN, "address 0 can become a custody account", "check_setCustody",
+     "        if (a == address(0)) revert NotCustody(address(0));\n        isCustody[a] = allowed;",
+     "        isCustody[a] = allowed;"),
+    (TOKEN, "custody change not logged", "check_setCustody",
+     "        _log(A_CUSTODY, keccak256(abi.encode(a, allowed)), evidenceHash);\n", ""),
     # ---- BridgedEnforcedToken (ERC-7281 bridge interface, Sections 4.1 and 5.6)
     (BRIDGED, "frozen holder can bridge out", "check_bridgeBurn",
      "if (u.status != ACTIVE) revert Restricted(user);",
@@ -142,6 +152,8 @@ MUTANTS = [
      "        if (--_roleCount[x.role] == 0) distinctRoles -= 1;\n", ""),
     (AUTH, "removeSigner does not deactivate the signer", "check_configBookkeeping",
      "        delete signers[s];\n", ""),
+    (AUTH, "fast tier accepts adding a custody account", "check_fastOnlyRestricts",
+     "return allowed ? 0 : 1;", "return 1;"),
     (AUTH, "fast-tier quorum ignores role coverage", "check_fastOnlyRestricts",
      "if (_popcount(roleMask) < minRoles) revert RolesNotCovered();", ""),
     (AUTH, "slow-tier quorum ignores role coverage", "check_queue",

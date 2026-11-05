@@ -24,8 +24,8 @@ contract Handler is Test {
     bytes32 constant EV = keccak256("ev");
 
     constructor() {
-        t = new EnforcedToken(address(this));
         for (uint256 i; i < 5; ++i) actors.push(address(uint160(0x1000 + i)));
+        t = new EnforcedToken(address(this), actors); // every actor may receive a seizure
         for (uint256 i; i < 5; ++i) {
             t.mint(actors[i], 1_000_000);
             ghostMinted += 1_000_000;

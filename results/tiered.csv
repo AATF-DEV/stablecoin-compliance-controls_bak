@@ -1,9 +1,9 @@
 variant,param,exec_gas,refund,calldata_bytes,intrinsic_gas,tx_gas,exceeds_eip7825
-fast_freeze_zero_balance,2,78717,0,516,25836,104553,0
-fast_freeze_funded,2,61617,0,516,25848,87465,0
-fast_place_hold,2,83218,0,548,26396,109614,0
+fast_freeze_zero_balance,2,78695,0,516,25836,104531,0
+fast_freeze_funded,2,61595,0,516,25848,87443,0
+fast_place_hold,2,83263,0,548,26396,109659,0
 slow_queue_seize,3,61176,0,612,27408,88584,0
-slow_execute_seize,3,44094,9600,356,24032,58526,0
+slow_execute_seize,3,46281,9600,356,24032,60713,0
 slow_queue_unfreeze,3,61167,0,580,26860,88027,0
-slow_execute_unfreeze,3,34240,4800,324,23496,52936,0
+slow_execute_unfreeze,3,34218,4800,324,23496,52914,0
 guardian_cancel,2,18220,4800,260,24020,37440,0

@@ -39,9 +39,9 @@ contract Sink {
 ///
 ///   T1  The fast tier only restricts: it never lowers a status, never reduces a held amount,
 ///       never moves a balance, never touches an existing hold, never raises a bridge limit,
-///       never queues, and only runs with at least M_r approvals and within the restriction budget,
-///       which is charged one unit per restrained account (one per address of a blockBatch); the
-///       approvers cover at least rolesR distinct roles.
+///       never adds a custody account, never queues, and only runs with at least M_r approvals
+///       and within the restriction budget, which is charged one unit per restrained account (one
+///       per address of a blockBatch); the approvers cover at least rolesR distinct roles.
 ///   T2  The fast tier rejects every other target and every non-restrictive selector.
 ///   T3  Queuing needs at least M_i approvals covering at least rolesI distinct roles, and sets
 ///       eta = now + delay.
@@ -72,6 +72,7 @@ contract TieredProofs is SymTest, Test {
     uint256 ei0; // pre-state budget epoch index
     uint256 ru0; // pre-state restricted count
     uint256 rq0; // pre-state role requirement
+    bool cust0; // pre-state custody flag of `o`
 
     function setUp() public {
         address[] memory s = new address[](3);
@@ -93,7 +94,7 @@ contract TieredProofs is SymTest, Test {
                 valueBudget: 100
             })
         );
-        t = new BridgedEnforcedToken(address(a));
+        t = new BridgedEnforcedToken(address(a), new address[](0));
         sink = new Sink();
         svm.enableSymbolicStorage(address(a));
         svm.enableSymbolicStorage(address(t));
@@ -199,7 +200,8 @@ contract TieredProofs is SymTest, Test {
         if (which == 3) return abi.encodeCall(EnforcedToken.placeHold, (hid, x, amt, ev));
         if (which == 4) return abi.encodeCall(EnforcedToken.releaseHold, (hid, ev));
         if (which == 5) return abi.encodeCall(EnforcedToken.seize, (hid, amt, dest, ev));
-        return abi.encodeCall(EnforcedToken.burnFromHold, (hid, amt, ev));
+        if (which == 6) return abi.encodeCall(EnforcedToken.burnFromHold, (hid, amt, ev));
+        return abi.encodeCall(EnforcedToken.setCustody, (x, s == 0, ev)); // add (s == 0) or remove
     }
 
     // ============================================================ T1: the fast tier only restricts
@@ -221,7 +223,7 @@ contract TieredProofs is SymTest, Test {
 
     function check_fastOnlyRestricts(uint8 which, address x, address y, uint8 k, address o) public {
         vm.assume(a.token() == address(t));
-        vm.assume(which <= 6 && k >= 1 && k <= 3);
+        vm.assume(which <= 7 && k >= 1 && k <= 3);
         vm.assume(t.statusOf(x) <= 2 && t.statusOf(y) <= 2 && t.statusOf(o) <= 2); // well-formed statuses
         bytes memory data = _fastDataSym(which, x, y);
         id2 = svm.createBytes32("id2");
@@ -236,6 +238,7 @@ contract TieredProofs is SymTest, Test {
         n0 = a.nonce();
         mmax0 = t.mintingMaxLimitOf(o);
         bmax0 = t.burningMaxLimitOf(o);
+        cust0 = t.isCustody(o);
         (uint64 e64, uint32 r32,) = a.usage();
         (ei0, ru0) = (e64, r32);
         rq0 = _rolesR();
@@ -248,7 +251,8 @@ contract TieredProofs is SymTest, Test {
         );
         if (!ok) return;
 
-        assert(which <= 3); // release, seize and burn never pass the fast tier
+        assert(which <= 3 || which == 7); // release, seize and burn never pass the fast tier
+        assert(cust0 || !t.isCustody(o)); // no seizure destination is ever added
         assert(t.mintingMaxLimitOf(o) == mmax0 && t.burningMaxLimitOf(o) == bmax0); // limits untouched
         assert(t.statusOf(o) >= st0); // restriction only goes up
         assert(t.heldOf(o) >= held0); // nothing is released or debited
@@ -300,7 +304,8 @@ contract TieredProofs is SymTest, Test {
     function check_fastRejectsOthers(address target, bytes4 sel, bytes32 w1, bytes32 w2, bytes32 ev, uint8 k) public {
         vm.assume(k >= 1 && k <= 3);
         bool restrictiveSel = sel == EnforcedToken.setStatus.selector || sel == EnforcedToken.blockBatch.selector
-            || sel == EnforcedToken.placeHold.selector || sel == BridgedEnforcedToken.setLimits.selector;
+            || sel == EnforcedToken.placeHold.selector || sel == BridgedEnforcedToken.setLimits.selector
+            || sel == EnforcedToken.setCustody.selector;
         vm.assume(target != a.token() || !restrictiveSel);
         bytes memory data = abi.encodePacked(sel, w1, w2, ev);
         (bool ok,) =

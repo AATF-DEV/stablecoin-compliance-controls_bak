@@ -33,6 +33,11 @@ contract Tiered is Test {
         });
     }
 
+    function _custodians() internal view returns (address[] memory r) {
+        r = new address[](1);
+        r[0] = custody;
+    }
+
     function setUp() public {
         vm.warp(1_800_000_000);
         address[] memory s = new address[](5);
@@ -50,7 +55,7 @@ contract Tiered is Test {
             g[i] = vm.addr(gpk[i]);
         }
         a = new TieredAuthority(s, roles, att, g, _policy());
-        t = new EnforcedToken(address(a));
+        t = new EnforcedToken(address(a), _custodians());
         a.bindToken(address(t));
         t.mint(alice, 10_000_000e6);
         t.mint(bob, 1e6);
@@ -191,6 +196,21 @@ contract Tiered is Test {
             vm.expectRevert(TieredAuthority.NotRestrictive.selector);
             a.execute(address(t), bad[i], EV, dl, sigs);
         }
+    }
+
+    /// Removing a seizure destination is restrictive (fast tier); adding one is not (slow tier only).
+    function test_custodyAddSlowRemoveFast() public {
+        address extra = address(0xC0FFEE);
+        _fastReverts(
+            address(t),
+            abi.encodeCall(EnforcedToken.setCustody, (extra, true, EV)),
+            _s(0, 1),
+            _err(TieredAuthority.NotRestrictive.selector)
+        );
+        _slow(address(t), abi.encodeCall(EnforcedToken.setCustody, (extra, true, EV)));
+        assertTrue(t.isCustody(extra));
+        _fast(abi.encodeCall(EnforcedToken.setCustody, (extra, false, EV)), _s(0, 1));
+        assertFalse(t.isCustody(extra));
     }
 
     function test_fastRejectsOtherTargetsAndConfig() public {
@@ -357,7 +377,7 @@ contract Tiered is Test {
     /// and a token before bindToken(), are counted against the same per-epoch budget.
     function test_valueBudgetCoversEveryTarget() public {
         // a second token controlled by the same authority
-        EnforcedToken t2 = new EnforcedToken(address(a));
+        EnforcedToken t2 = new EnforcedToken(address(a), _custodians());
         t2.mint(alice, 10_000_000e6);
         bytes32 h = keccak256("order-other-token");
         _slow(address(t2), abi.encodeCall(EnforcedToken.placeHold, (h, alice, 3_000_000e6, EV)));
@@ -377,7 +397,7 @@ contract Tiered is Test {
         address[] memory g = new address[](3);
         for (uint256 i; i < 3; ++i) g[i] = vm.addr(gpk[i]);
         TieredAuthority b = new TieredAuthority(s, roles, att, g, _policy());
-        EnforcedToken t3 = new EnforcedToken(address(b));
+        EnforcedToken t3 = new EnforcedToken(address(b), _custodians());
         t3.mint(alice, 10_000_000e6);
         assertEq(b.token(), address(0));
         (TieredAuthority prev, EnforcedToken prevT) = (a, t);
@@ -502,7 +522,7 @@ contract Tiered is Test {
         TieredAuthority b = new TieredAuthority(s, roles, att, g, p);
         vm.expectRevert(TieredAuthority.WrongToken.selector);
         b.bindToken(address(t)); // t is controlled by `a`, not by `b`
-        EnforcedToken own = new EnforcedToken(address(b));
+        EnforcedToken own = new EnforcedToken(address(b), _custodians());
         b.bindToken(address(own));
         assertEq(b.token(), address(own));
     }

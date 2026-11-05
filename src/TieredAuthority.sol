@@ -10,6 +10,7 @@ interface IEnforcedToken {
     function placeHold(bytes32 id, address a, uint96 amt, bytes32 evidenceHash) external;
     function seize(bytes32 id, uint96 amt, address dest, bytes32 evidenceHash) external;
     function burnFromHold(bytes32 id, uint96 amt, bytes32 evidenceHash) external;
+    function setCustody(address a, bool allowed, bytes32 evidenceHash) external;
     // bridged tokens only (BridgedEnforcedToken, ERC-7281 limits)
     function setLimits(address bridge, uint256 mintingLimit, uint256 burningLimit, bytes32 evidenceHash) external;
     function mintingMaxLimitOf(address bridge) external view returns (uint256);
@@ -22,11 +23,12 @@ interface IEnforcedToken {
 ///   * Fast tier (`execute`): RESTRICTIVE and reversible actions on the bound token only, i.e.
 ///     setStatus that strictly raises an account's restriction (Active < Frozen < Blocked),
 ///     blockBatch, placeHold, and (for a bridged token) setLimits that raises neither of a
-///     bridge's limits, so a compromised bridge can be shut down immediately. Quorum M_r with at least `rolesR` distinct signer roles,
+///     bridge's limits, so a compromised bridge can be shut down immediately, and setCustody that
+///     removes a custody account. Quorum M_r with at least `rolesR` distinct signer roles,
 ///     no delay, and a per-epoch budget on the number of accounts restrained.
 ///   * Slow tier (`queue` -> `executeQueued`): EVERYTHING ELSE, i.e. unfreeze/unblock,
-///     release, seize, burn, any other target, and every change to this contract's own
-///     configuration (signer rotation, guardians, thresholds, delay, budgets). Quorum M_i > M_r
+///     release, seize, burn, adding a custody account, any other target, and every change to this
+///     contract's own configuration (signer rotation, guardians, thresholds, delay, budgets). Quorum M_i > M_r
 ///     with at least `rolesI` distinct roles; executable only in [eta, eta + GRACE], where
 ///     eta = queue time + delay; cancellable before execution by a disjoint guardian quorum.
 ///     Seized plus burned value is capped per epoch; raising the cap is itself a slow-tier action.
@@ -241,6 +243,11 @@ contract TieredAuthority {
             (address b, uint256 m, uint256 u,) = abi.decode(data[4:], (address, uint256, uint256, bytes32));
             IEnforcedToken tk = IEnforcedToken(target);
             return (m <= tk.mintingMaxLimitOf(b) && u <= tk.burningMaxLimitOf(b)) ? 1 : 0;
+        }
+        if (sel == IEnforcedToken.setCustody.selector) {
+            // removing a seizure destination is restrictive; adding one is not
+            (, bool allowed,) = abi.decode(data[4:], (address, bool, bytes32));
+            return allowed ? 0 : 1;
         }
         return 0;
     }
