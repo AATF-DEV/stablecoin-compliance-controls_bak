@@ -7,7 +7,7 @@ runs the relevant Halmos check, and requires a counterexample. The original sour
 restored, even on error.
 
 Usage (from the repository root):
-  python3 scripts/mutation_check.py                 all mutants (~90 min on two cores)
+  python3 scripts/mutation_check.py                 all mutants (~2 h on two cores)
   python3 scripts/mutation_check.py budget          only mutants whose name contains "budget"
   python3 scripts/mutation_check.py --shard 2/6     every 6th mutant starting at index 2 (CI runs 6 shards)
 Every mutant's pattern is checked before anything runs, whatever the filter or shard.

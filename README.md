@@ -70,7 +70,7 @@ Account states:
 | Fast (`execute`) | Restrictive and reversible only: `setStatus` that strictly raises restriction (Active < Frozen < Blocked), `blockBatch`, `placeHold`, `setLimits` that raises neither of a bridge's limits, and `setCustody` that removes a custody account | M_r signatures covering at least `rolesR` roles | Immediate; at most `restrictBudget` accounts restrained per epoch |
 | Slow (`queue` → `executeQueued`) | Everything else: unfreeze, unblock, release, seize, burn, adding a custody account, any other target, and every configuration change | M_i > M_r signatures covering at least `rolesI` roles | Executable in [eta, eta + 14 days], eta = queue time + `delay` (≥ 1 h); a disjoint guardian quorum can cancel before execution; seized + burned value capped per epoch, for any target |
 
-Classification happens at execution time and fails closed: anything the fast tier does not recognise as restrictive is rejected there. Configuration (signer rotation, guardians, quorums, roles, delay, budgets) can only be changed by the authority itself, i.e. through the slow tier, and every change must leave a satisfiable policy with 1 ≤ M_r < M_i ≤ N, enough distinct roles, a non-empty guardian quorum and a delay of at least one hour. Signers and guardians are disjoint. The authority binds once to a token that names it as its authority; budgets and fast-tier classification apply to that token. Each signer is registered with a role and the hash of its HSM key attestation; events list the approving signers.
+Classification happens at execution time and fails closed: anything the fast tier does not recognise as restrictive is rejected there. Configuration (signer rotation, guardians, quorums, roles, delay, budgets) can only be changed by the authority itself, i.e. through the slow tier, and every change must leave a satisfiable policy with 1 ≤ M_r < M_i ≤ N, enough distinct roles, a non-empty guardian quorum and a delay of at least one hour. Signers and guardians are disjoint. The authority binds once to a token that names it as its authority; fast-tier classification and the restriction budget apply to that token, while the value budget counts seizures and burns on any target, so a second token, or a token before binding, cannot escape it. Each signer is registered with a role and the hash of its HSM key attestation; events list the approving signers.
 
 Measured transaction gas (fast tier 2-of-5, slow tier 3-of-5 over two roles, guardians 2-of-3; [`results/tiered.csv`](results/tiered.csv)):
 
@@ -83,11 +83,11 @@ Measured transaction gas (fast tier 2-of-5, slow tier 3-of-5 over two roles, gua
 | Slow unfreeze: queue + execute | 88,027 + 52,914 | 68,069 (no delay) |
 | Guardian cancel (2-of-3) | 37,440 | — |
 
-The fast tier costs about 18,000–19,000 gas more per action than the single-threshold gate: it reads the target's current status to classify the action, updates the budget counter, and logs the approvers.
+The fast tier costs about 17,900–19,400 gas more per action than the single-threshold gate: it reads the target's current status to classify the action, updates the budget counter, and logs the approvers.
 
 Proved with Halmos (`test/TieredHalmos.t.sol`, `halmos --contract TieredProofs --loop 3`), with `ecrecover` abstracted so that every outcome of signature recovery is covered, and with the authority's and token's entire storage symbolic (including every slot the constructor wrote):
 
-- **T1** the fast tier only restricts: no status is lowered, no held amount reduced, no balance or supply changed, no existing hold touched, no bridge limit raised, nothing queued; it needs at least M_r approvals covering at least `rolesR` distinct roles, and stays within the restriction budget, which is charged one unit per restrained account (one per address of a `blockBatch`);
+- **T1** the fast tier only restricts: no status is lowered, no held amount reduced, no balance or supply changed, no existing hold touched, no bridge limit raised, no custody account added, nothing queued; it needs at least M_r approvals covering at least `rolesR` distinct roles, and stays within the restriction budget, which is charged one unit per restrained account (one per address of a `blockBatch`);
 - **T2** the fast tier rejects every other target and every non-restrictive selector;
 - **T3** queuing needs at least M_i approvals covering at least `rolesI` distinct roles, and sets eta = now + delay;
 - **T4** a queued action executes once, only within [eta, eta + grace];
@@ -127,7 +127,7 @@ Measured transaction gas ([`results/bridge.csv`](results/bridge.csv)):
 | Plain transfer on the bridged token | 35,034 (same as `EnforcedToken`) |
 | Fast-tier bridge shutdown, 2-of-5 | 97,953 |
 
-Proved with Halmos (`test/BridgedHalmos.t.sol`, `halmos --contract BridgedProofs`). All twelve `EnforcedToken` checks are re-run against the bridged token. In addition:
+Proved with Halmos (`test/BridgedHalmos.t.sol`, `halmos --contract BridgedProofs`). All thirteen `EnforcedToken` checks are re-run against the bridged token. In addition:
 - **B1:** bridge-out happens only through an allow-listed, unblocked bridge within its burning limit. The holder is `ACTIVE`, at most the spendable balance leaves, held value and all other state are untouched, and supply falls by exactly the amount burned. A bridge other than the holder spends exactly the amount from the holder's finite allowance.
 - **B2:** bridge-in happens only through an allow-listed, unblocked bridge within its minting limit, never to a `BLOCKED` account, and supply rises by exactly the amount minted.
 - **B3:** limits change only through the authority. Each change keeps the available value within the new maxima and appends exactly the specified log entry.
@@ -196,8 +196,8 @@ The Halmos checks make the token's entire storage symbolic, so they quantify ove
 
 ```bash
 pip install halmos==0.3.3
-make prove          # token, bridged-token and tiered-authority proofs  (~8 min)
-make mutate         # 54 injected bugs, each must yield a counterexample (~90 min on two cores)
+make prove          # token, bridged-token and tiered-authority proofs  (~9 min on two cores)
+make mutate         # 54 injected bugs, each must yield a counterexample (~2 h on two cores; CI runs six shards in parallel)
 ```
 
 ## Repository layout
@@ -207,7 +207,7 @@ make mutate         # 54 injected bugs, each must yield a counterexample (~90 mi
 ├── src/                      Solidity contracts
 ├── test/
 │   ├── Bench.t.sol           gas benchmarks → results/*.csv
-│   ├── Security.t.sol        unit tests (authorization, state semantics, SMT rejection)
+│   ├── Security.t.sol        unit tests (authorization, state semantics, custody list, SMT rejection)
 │   ├── Invariants.t.sol      stateful invariant fuzzing
 │   ├── Halmos.t.sol          symbolic proofs of the safety invariants
 │   ├── Tiered.t.sol          unit tests for the tiered authority
@@ -234,7 +234,8 @@ make mutate         # 54 injected bugs, each must yield a counterexample (~90 mi
 
 Requirements:
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) **v1.5.1**. Install it with `foundryup --install v1.5.1`.
-- Python 3.10+ with `pip install -r requirements.txt`. Python is only needed to regenerate SMT data or the figure.
+- Python 3.10+ with `pip install -r requirements.txt`, for the ingestion tool and its tests, the ingestion demo, the SMT data, the figure and the mutation check.
+- For the proofs: Halmos 0.3.3 (`pip install halmos==0.3.3`).
 
 ```bash
 git clone --recursive https://github.com/AATF-DEV/stablecoin-compliance-controls.git
@@ -263,7 +264,7 @@ If you cloned without `--recursive`, run `git submodule update --init` first.
 - **Compiler and EVM.** solc 0.8.28 with the optimizer on (200 runs) and `evm_version = prague`. None of the Osaka/Fusaka changes alter the cost of the opcodes used here.
 - **Isolation mode is required.** `--isolate` makes each top-level call its own transaction with cold storage. Under isolation, Foundry v1.5.1 reports full transaction gas in `vm.lastCallGas().gasTotalUsed`, including the 21,000 base cost, calldata, and the EIP-7623 floor. The harness subtracts refunds, capped at one fifth (EIP-3529).
 - **Pinned forge-std.** forge-std is pinned to v1.12.0 because newer versions change the `Vm.Gas` struct, which breaks `lastCallGas()` decoding on Foundry v1.5.1.
-- **Steady state.** Each compliance scenario performs one unmeasured warm-up action first, so the authority nonce and log head are already non-zero, as they would be on a live deployment.
+- **Steady state.** Each compliance scenario performs one unmeasured warm-up action first, so the authority nonce and log head are already non-zero, as they would be on a live deployment. Without it, the first `TieredAuthority` action on a fresh deployment costs about 68,000 gas more (for example 172,978 instead of 104,531 for a fast-tier freeze), for the one-time initialisation of the nonce, budget and log slots.
 - **EIP-7825 cap.** The cap is not enforced by Foundry. It is checked explicitly in the `exceeds_eip7825` column.
 - **SMT data.** Restricted addresses are uniformly random from a fixed seed. Proofs are verified in Python before they are written.
 
@@ -283,4 +284,4 @@ See [`CITATION.cff`](CITATION.cff), or:
 
 ## License
 
-[MIT](LICENSE). forge-std is included as a submodule under its own MIT/Apache-2.0 license.
+[MIT](LICENSE). The submodules keep their own licenses: forge-std is MIT/Apache-2.0, and halmos-cheatcodes, used only by the symbolic-proof harnesses in `test/`, is AGPL-3.0.

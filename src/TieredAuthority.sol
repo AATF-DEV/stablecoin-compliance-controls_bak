@@ -161,7 +161,8 @@ contract TieredAuthority {
     /// @notice One-time binding of the token this authority controls (the token's constructor
     ///         needs the authority's address, so the two cannot both be immutable). The token
     ///         must name this contract as its authority, so the fast-tier classification and the
-    ///         value budget apply to the token this authority actually controls.
+    ///         restriction budget apply to the token this authority actually controls. (The value
+    ///         budget does not depend on binding: it counts seizures and burns on any target.)
     function bindToken(address t) external {
         if (msg.sender != deployer) revert NotDeployer();
         if (token != address(0) || t == address(0)) revert AlreadyBound();
