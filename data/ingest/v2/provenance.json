@@ -1,0 +1,20 @@
+[
+ {
+  "name": "SDN.XML",
+  "sha256": "e02bfee9b427b84477368e7e1ec7c30620a7c653938f6292c7e1f3b7118f96a1",
+  "bytes": 255254,
+  "format": "SDN_XML",
+  "entries": 1331,
+  "nonEvmSkipped": 10,
+  "publishDate": "10/15/2026"
+ },
+ {
+  "name": "SDN_ADVANCED.XML",
+  "sha256": "c480f9717d1bd617fd743390aefad1e6ca51b9ca8946db98f16988183438de5f",
+  "bytes": 379907,
+  "format": "SDN_ADVANCED_XML",
+  "entries": 1331,
+  "nonEvmSkipped": 10,
+  "publishDate": null
+ }
+]

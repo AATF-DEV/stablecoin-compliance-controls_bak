@@ -1,0 +1,7 @@
+variant,param,exec_gas,refund,calldata_bytes,intrinsic_gas,tx_gas,exceeds_eip7825
+smt_proofs,1,17453,0,388,23740,41193,0
+smt_proofs,10,19579,0,580,26812,46391,0
+smt_proofs,100,21735,0,772,29860,51595,0
+smt_proofs,1000,23459,0,996,33480,56939,0
+smt_proofs,10000,24809,0,1156,36016,60825,0
+smt_proofs,100000,29436,0,1444,40624,70060,0

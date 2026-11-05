@@ -1,0 +1,7 @@
+variant,param,exec_gas,refund,calldata_bytes,intrinsic_gas,tx_gas,exceeds_eip7825
+single_key,1,35777,0,100,21856,57633,0
+quorum,1,53653,0,452,24788,78441,0
+quorum,2,59367,0,516,25812,85179,0
+quorum,3,65081,0,580,26872,91953,0
+quorum,4,70796,0,644,27884,98680,0
+quorum,5,76510,0,708,28944,105454,0

@@ -1,0 +1,5 @@
+variant,param,exec_gas,refund,calldata_bytes,intrinsic_gas,tx_gas,exceeds_eip7825
+bridge_out_burn,0,34817,0,100,21532,56349,0
+bridge_in_mint,0,23950,0,68,21380,45330,0
+bridged_token_transfer,0,13654,0,68,21380,35034,0
+fast_bridge_shutdown,2,71718,0,548,26168,97886,0

@@ -1,0 +1,7 @@
+variant,param,exec_gas,refund,calldata_bytes,intrinsic_gas,tx_gas,exceeds_eip7825
+freeze,0,42267,0,516,25836,68103,0
+place_hold,0,65335,0,548,26372,91707,0
+seize_full,0,51717,4800,548,26372,73289,0
+burn_partial,0,55733,0,516,26208,81941,0
+release,0,42841,4800,484,26056,64097,0
+unfreeze,0,42267,0,516,25824,68091,0

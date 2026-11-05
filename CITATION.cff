@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "stablecoin-compliance-controls: reference implementation and gas benchmarks for ledger-level stablecoin compliance controls"
+authors:
+  - family-names: Wang
+    given-names: Meng
+    email: mengwang.dev@outlook.com
+license: MIT
+version: 0.1.0
+date-released: 2026-11-03
+repository-code: "https://github.com/AATF-DEV/stablecoin-compliance-controls"
+keywords:
+  - stablecoin
+  - GENIUS Act
+  - compliance
+  - Solidity
+  - Foundry
+  - sparse Merkle tree
+  - threshold authorization

@@ -1,0 +1,2 @@
+pycryptodome>=3.20
+matplotlib>=3.8
