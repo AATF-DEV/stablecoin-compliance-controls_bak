@@ -87,6 +87,6 @@ a3.legend(loc="upper left", frameon=False, handlelength=1.8)
 
 plt.tight_layout(w_pad=1.2)
 OUT.mkdir(parents=True, exist_ok=True)
-plt.savefig(OUT / "compliance_gas_benchmark.pdf")
+plt.savefig(OUT / "compliance_gas_benchmark.pdf", metadata={"CreationDate": None})  # reproducible bytes
 plt.savefig(OUT / "compliance_gas_benchmark.png", dpi=200)
 print("written to", OUT)

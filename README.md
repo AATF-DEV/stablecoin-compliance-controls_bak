@@ -36,7 +36,7 @@ All values are full transaction gas (base cost + calldata + execution − capped
 | Release hold | 64,142 |
 | Update SMT root (any batch size) | ≈ 55,450 |
 
-Batch blocking through a separate mapping exceeds the EIP-7825 per-transaction cap (2²⁴ = 16,777,216 gas) at roughly **690 addresses** per transaction. Raw data is in [`results/`](results/).
+Batch blocking through a separate mapping exceeds the EIP-7825 per-transaction cap (2²⁴ = 16,777,216 gas) at roughly **690 addresses** per transaction. Raw data is in [`results/`](results/); [`results/summary.md`](results/summary.md) has every table and derived figure of the paper's Section 6.
 
 ## Design
 
@@ -298,9 +298,10 @@ Every benchmark CSV in `results/` has the same columns, one row per measured tra
 | `bridge.csv` | bridge-out, bridge-in, transfer on the bridged token, fast-tier bridge shutdown | 0, or signatures supplied |
 
 Other outputs:
+- `results/summary.md`: the paper's Section 6 tables and derived figures (overheads, fits, sums, ratios), computed from the CSVs by `make report`.
 - `data/smt_<N>.json`: for N restricted addresses, the SMT root, the non-membership proofs for the benchmark's sender and recipient, and the proof for one restricted address, which the tests use to check that the contract rejects it (`make data`).
 - `data/ingest/v1/`, `data/ingest/v2/`: the ingestion demo's `manifest.json`, `provenance.json` and `report.md` (`make ingest`).
-- `make plot` writes `compliance_gas_benchmark.pdf` and `.png` into `results/` (git-ignored); the committed copy of the figure is `docs/compliance_gas_benchmark.png`.
+- `make plot` writes `compliance_gas_benchmark.pdf` and `.png` into `results/` (git-ignored) or into `PLOT_DIR`; the committed copies of the figure are `docs/compliance_gas_benchmark.pdf` and `.png`.
 
 ## Repository layout
 
@@ -320,48 +321,97 @@ Other outputs:
 ├── scripts/
 │   ├── gen_smt.py            builds SMTs over random restricted addresses → data/
 │   ├── plot.py               draws the figure from results/*.csv
+│   ├── summarize.py          paper tables from results/*.csv → results/summary.md
 │   ├── sanctions_ingest.py   sanctions-list ingestion (build / verify)
 │   ├── tests/                tool tests, OFAC-format fixtures, demo generator
 │   └── mutation_check.py     non-vacuity check for the Halmos proofs
 ├── data/                     SMT roots and proofs used by the benchmarks; ingest/ demo outputs
-├── results/                  measured gas (committed; CI checks they reproduce exactly)
-├── docs/                     figure used in this README
+├── results/                  measured gas and summary.md (committed; CI checks they reproduce exactly)
+├── docs/                     the figure: .pdf for the paper, .png for this README
 ├── lib/forge-std/            git submodule, pinned to v1.12.0
 ├── lib/halmos-cheatcodes/    git submodule (symbolic-testing cheatcodes)
 ├── foundry.toml
 └── Makefile
 ```
 
-## Reproducing
+## Step by step
 
-Requirements:
-- [Foundry](https://book.getfoundry.sh/getting-started/installation) **v1.5.1**. Install it with `foundryup --install v1.5.1`.
-- Python 3.10+ with `pip install -r requirements.txt`, for the ingestion tool and its tests, the ingestion demo, the SMT data, the figure and the mutation check.
-- For the proofs: Halmos 0.3.3 (`pip install halmos==0.3.3`).
+### 1. Install the tools
+
+Foundry **v1.5.1** (forge, cast, anvil). Other versions report gas differently, so the results will not match:
+
+```bash
+curl -L https://foundry.paradigm.xyz | bash      # installs foundryup; then open a new shell
+foundryup --install v1.5.1
+forge --version                                  # must show 1.5.1
+```
+
+Python **3.10+**, preferably in a virtual environment. Halmos is needed only for the proofs and the mutation check:
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt                  # pycryptodome, matplotlib
+pip install halmos==0.3.3
+```
+
+On its first build, forge downloads solc 0.8.28, so the first run needs internet access.
+
+### 2. Get the code and build it
 
 ```bash
 git clone --recursive https://github.com/AATF-DEV/stablecoin-compliance-controls.git
 cd stablecoin-compliance-controls
-
-make test     # unit tests + invariant fuzzing
-make tools    # ingestion tool tests (uses anvil)
-make ingest   # regenerate the ingestion demo and execute it on-chain
-make bench    # gas benchmarks (forge test --isolate), rewrites results/*.csv
-make plot     # figure from results/ (written to results/)
-make data     # optional: regenerate SMT trees and proofs (~2 min)
-make prove    # symbolic proofs (needs Halmos)
-make mutate   # non-vacuity check (needs Halmos; ~2 h on two cores)
+# if you cloned without --recursive: git submodule update --init
+make build                                       # "Compiler run successful"
 ```
 
-`make all` runs `test tools ingest prove mutate bench plot` in that order. `git status` afterwards shows whether the committed results and data were reproduced.
+### 3. Run everything and collect the results
 
-If you cloned without `--recursive`, run `git submodule update --init` first.
+Each target can be run on its own. Times are for a two-core machine.
+
+| Command | What it does | Writes | Expected output | Time |
+|---|---|---|---|---|
+| `make test` | unit tests and invariant fuzzing | — | `66 tests passed, 0 failed` | < 1 min |
+| `make tools` | ingestion-tool tests (starts a local anvil node) | — | `Ran 25 tests` … `OK` | seconds |
+| `make ingest` | regenerates the ingestion demo and executes it on-chain | `data/ingest/` | `2 passed`; batch gas such as `15076846` | seconds |
+| `make bench` | gas benchmarks | `results/*.csv` | `7 passed` | < 1 min |
+| `make data` | SMT trees and proofs | `data/smt_*.json` | one line per N | ~2 min |
+| `make report` | the paper's tables and derived figures from the CSVs | `results/summary.md` | `written to …` | seconds |
+| `make plot` | Figure 2 of the paper | `results/compliance_gas_benchmark.{pdf,png}` | `written to …` | seconds |
+| `make prove` | symbolic proofs | — | `13 passed`, `16 passed`, `10 passed` | ~9 min |
+| `make mutate` | non-vacuity check | — | `54/54 mutants killed` | ~2 h |
+
+`make all` runs `test tools ingest prove mutate bench report plot` in that order. To keep a log of the whole run:
+
+```bash
+make all 2>&1 | tee run.log
+```
+
+The results to read are `results/summary.md` (every table and derived figure of Section 6, computed from the CSVs), the CSVs themselves (columns described under [Output files](#output-files)), and the pass/fail lines in the log.
+
+### 4. Check that the published results were reproduced
+
+```bash
+make reproduce
+```
+
+This runs `test tools ingest bench data report` and then compares `results/` and `data/` with the committed files. It ends with `All committed results and data reproduced exactly.`, or fails and shows the differing lines with `git diff`. It is the same check as CI's reproduce job. The figure is not part of the comparison: its bytes depend on the matplotlib version, which is not pinned.
+
+### 5. Produce the paper's figure
+
+The paper includes `figures/compliance_gas_benchmark.pdf`. Write it straight into the paper's directory:
+
+```bash
+make plot PLOT_DIR=/path/to/paper/figures
+```
+
+Every number in the figure is read from `results/*.csv`. The repository also keeps a copy of both files, made from the committed CSVs: [`docs/compliance_gas_benchmark.pdf`](docs/compliance_gas_benchmark.pdf) for the paper and the `.png` shown at the top of this README. To refresh them after new measurements: `make plot PLOT_DIR=docs`.
 
 ### Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request, with Foundry v1.5.1 and Halmos 0.3.3:
 
-- **reproduce**: `make test`, `make tools`, `make ingest`, `make bench` and `make data`. The job then fails unless `results/*.csv`, `data/ingest/` and `data/smt_*.json` are byte-identical to the committed files.
+- **reproduce**: `make test`, `make tools`, `make ingest`, `make bench`, `make data` and `make report`. The job then fails unless `results/*.csv`, `results/summary.md`, `data/ingest/` and `data/smt_*.json` are byte-identical to the committed files.
 - **proofs**: `make prove`. The job fails if any proof fails.
 - **mutate**: the mutation check in six parallel shards (`scripts/mutation_check.py --shard I/6`). A shard fails if any of its injected bugs survives, or if any mutant's pattern no longer matches the sources.
 

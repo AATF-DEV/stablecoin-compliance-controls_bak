@@ -1,8 +1,9 @@
 # Re-runs everything the paper reports and fails unless the committed data reproduce exactly.
 #
 #   reproduce: unit tests and invariant fuzzing, ingestion-tool tests, the on-chain ingestion demo,
-#              the gas benchmarks and the SMT data. results/*.csv, data/ingest/ and data/smt_*.json
-#              are regenerated and must be byte-identical to the committed files.
+#              the gas benchmarks, the SMT data and the results summary. results/*.csv,
+#              results/summary.md, data/ingest/ and data/smt_*.json are regenerated and must be
+#              byte-identical to the committed files.
 #   proofs:    the three Halmos suites.
 #   mutate:    the mutation (non-vacuity) check, in six parallel shards.
 name: ci
@@ -61,6 +62,9 @@ jobs:
 
       - name: SMT trees and proofs
         run: make data
+
+      - name: Summary of the paper's tables (results/summary.md)
+        run: make report
 
       - name: Committed data must reproduce exactly
         run: |
