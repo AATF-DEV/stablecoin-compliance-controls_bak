@@ -6,6 +6,9 @@
 #              byte-identical to the committed files.
 #   proofs:    the three Halmos suites.
 #   mutate:    the mutation (non-vacuity) check, in six parallel shards.
+# The proofs and mutate jobs time every run (scripts/timed.py: wall and CPU time, cores available and
+# used, solver threads, per-check times) and upload results/timing/ as a build artifact. Timing is
+# machine-dependent and never compared.
 name: ci
 
 on:
@@ -91,8 +94,25 @@ jobs:
       - name: Halmos
         run: pip install halmos==0.3.3
 
+      - name: Toolchain and cores
+        run: |
+          halmos --version
+          echo "cores available: $(python3 scripts/timed.py --cores), logical CPUs: $(nproc --all)"
+
       - name: Symbolic proofs (token, bridged token, tiered authority)
         run: make prove
+
+      - name: Timing summary
+        if: always()
+        run: make timing && cat results/timing/summary.md
+
+      - name: Upload timing
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timing-proofs
+          path: results/timing/
+          if-no-files-found: ignore
 
   # The mutation check runs one Halmos check per injected bug (~90 min on two cores), so it is
   # split into six shards that run in parallel. Each shard first verifies every mutant's pattern.
@@ -120,7 +140,19 @@ jobs:
         run: pip install halmos==0.3.3
 
       - name: Non-vacuity, shard ${{ matrix.shard }} of 6 (every injected bug must yield a counterexample)
-        run: python3 scripts/mutation_check.py --shard ${{ matrix.shard }}/6
+        run: make mutate SHARD=${{ matrix.shard }}/6
+
+      - name: Timing summary
+        if: always()
+        run: make timing && cat results/timing/summary.md
+
+      - name: Upload timing
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timing-mutate-shard${{ matrix.shard }}
+          path: results/timing/
+          if-no-files-found: ignore
 
       - name: Sources restored after mutation
         run: git diff --exit-code -- src

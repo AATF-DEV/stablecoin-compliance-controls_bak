@@ -254,7 +254,10 @@ The Halmos checks make the token's entire storage symbolic, so they quantify ove
 pip install halmos==0.3.3
 make prove          # token, bridged-token and tiered-authority proofs  (~9 min on two cores)
 make mutate         # 54 injected bugs, each must yield a counterexample (~2 h on two cores; CI runs six shards in parallel)
+make timing         # how long they took and how many cores they had and used (see "Timing" below)
 ```
+
+Both targets pass `--solver-threads` to Halmos, set by default to the cores this process may use, and record their own timing; the times above are only indicative.
 
 ## What is checked
 
@@ -302,6 +305,7 @@ Other outputs:
 - `data/smt_<N>.json`: for N restricted addresses, the SMT root, the non-membership proofs for the benchmark's sender and recipient, and the proof for one restricted address, which the tests use to check that the contract rejects it (`make data`).
 - `data/ingest/v1/`, `data/ingest/v2/`: the ingestion demo's `manifest.json`, `provenance.json` and `report.md` (`make ingest`).
 - `make plot` writes `compliance_gas_benchmark.pdf` and `.png` into `results/` (git-ignored) or into `PLOT_DIR`; the committed copies of the figure are `docs/compliance_gas_benchmark.pdf` and `.png`.
+- `results/timing/` (git-ignored, machine-dependent): one JSON file per timed run of `make prove` and `make mutate`, and `summary.md` and `caption.tex` written from them by `make timing` (see [Timing](#6-timing-of-the-proofs-and-the-mutation-check)).
 
 ## Repository layout
 
@@ -322,6 +326,8 @@ Other outputs:
 │   ├── gen_smt.py            builds SMTs over random restricted addresses → data/
 │   ├── plot.py               draws the figure from results/*.csv
 │   ├── summarize.py          paper tables from results/*.csv → results/summary.md
+│   ├── timed.py              runs a command and records its time and core usage → results/timing/
+│   ├── timing_report.py      timing summary and the paper's Halmos-table sentence from results/timing/
 │   ├── sanctions_ingest.py   sanctions-list ingestion (build / verify)
 │   ├── tests/                tool tests, OFAC-format fixtures, demo generator
 │   └── mutation_check.py     non-vacuity check for the Halmos proofs
@@ -367,7 +373,7 @@ make build                                       # "Compiler run successful"
 
 ### 3. Run everything and collect the results
 
-Each target can be run on its own. Times are for a two-core machine.
+Each target can be run on its own. Times are indicative, for a two-core machine; `make prove` and `make mutate` measure and record their own (step 6).
 
 | Command | What it does | Writes | Expected output | Time |
 |---|---|---|---|---|
@@ -378,10 +384,11 @@ Each target can be run on its own. Times are for a two-core machine.
 | `make data` | SMT trees and proofs | `data/smt_*.json` | one line per N | ~2 min |
 | `make report` | the paper's tables and derived figures from the CSVs | `results/summary.md` | `written to …` | seconds |
 | `make plot` | Figure 2 of the paper | `results/compliance_gas_benchmark.{pdf,png}` | `written to …` | seconds |
-| `make prove` | symbolic proofs | — | `13 passed`, `16 passed`, `10 passed` | ~9 min |
-| `make mutate` | non-vacuity check | — | `54/54 mutants killed` | ~2 h |
+| `make prove` | symbolic proofs | `results/timing/halmos_*.json` | `13 passed`, `16 passed`, `10 passed` | ~9 min |
+| `make mutate` | non-vacuity check | `results/timing/mutation.json` | `54/54 mutants killed` | ~2 h |
+| `make timing` | timing summary of the two above | `results/timing/summary.md`, `caption.tex` | `written to …` | seconds |
 
-`make all` runs `test tools ingest prove mutate bench report plot` in that order. To keep a log of the whole run:
+`make all` runs `test tools ingest prove mutate bench report timing plot` in that order. To keep a log of the whole run:
 
 ```bash
 make all 2>&1 | tee run.log
@@ -407,13 +414,44 @@ make plot PLOT_DIR=/path/to/paper/figures
 
 Every number in the figure is read from `results/*.csv`. The repository also keeps a copy of both files, made from the committed CSVs: [`docs/compliance_gas_benchmark.pdf`](docs/compliance_gas_benchmark.pdf) for the paper and the `.png` shown at the top of this README. To refresh them after new measurements: `make plot PLOT_DIR=docs`.
 
+### 6. Timing of the proofs and the mutation check
+
+The proof and mutation times depend on the machine, so they are measured rather than written down. `make prove` and `make mutate` run each Halmos suite (and the whole mutation check) through `scripts/timed.py`, which passes the output through unchanged and then writes `results/timing/<run>.json` with:
+
+| Field | Meaning |
+|---|---|
+| `wall_s` | wall-clock time of the run, including the build Halmos does first |
+| `cpu_s` | user + system CPU time of the run and of every process it waited for, including the solver processes |
+| `cores_available` | cores the process may use: the CPU affinity mask, capped by a cgroup CPU quota if one is set (containers, CI). This is what `python3 scripts/timed.py --cores` prints |
+| `cores_used_avg` | `cpu_s / wall_s`, the average number of cores actually busy |
+| `solver_threads` | the value passed to `halmos --solver-threads` |
+| `checks` | every check's result, path count and time as Halmos reports it; for the mutation check, every mutant's result and time |
+
+plus the CPU model, the number of logical CPUs on the machine, OS, Python and Halmos versions, the git commit (`-dirty` if the sources were modified) and whether it ran in CI.
+
+Halmos' own default for `--solver-threads` is the number of CPUs on the machine, which in a container or on a shared runner can exceed the cores the process may actually use. The Makefile therefore always passes the detected number explicitly, and `THREADS` overrides it, so that runs on different machines can be compared under the same setting:
+
+```bash
+make prove THREADS=2
+make mutate THREADS=4 SHARD=1/6     # one of six shards; timing goes to results/timing/mutation_shard1of6.json
+make timing
+```
+
+`make timing` writes `results/timing/summary.md` (one row per run, then each suite's checks from slowest to fastest) and `results/timing/caption.tex`, the sentence for the paper's Halmos table, for example:
+
+> All pass; wall-clock times: token 13 checks in 12.8 s, bridged token 16 checks in 29.9 s, tiered authority 10 checks in 154 s (2 cores available, 1.9 in use on average, `--solver-threads 2`, Halmos 0.3.3).
+
+The paper can `\input` that file instead of stating core counts and times by hand. The numbers in this example are illustrative. Timing is not part of `make reproduce`, and `results/timing/` is git-ignored.
+
 ### Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request, with Foundry v1.5.1 and Halmos 0.3.3:
 
 - **reproduce**: `make test`, `make tools`, `make ingest`, `make bench`, `make data` and `make report`. The job then fails unless `results/*.csv`, `results/summary.md`, `data/ingest/` and `data/smt_*.json` are byte-identical to the committed files.
 - **proofs**: `make prove`. The job fails if any proof fails.
-- **mutate**: the mutation check in six parallel shards (`scripts/mutation_check.py --shard I/6`). A shard fails if any of its injected bugs survives, or if any mutant's pattern no longer matches the sources.
+- **mutate**: the mutation check in six parallel shards (`make mutate SHARD=I/6`). A shard fails if any of its injected bugs survives, or if any mutant's pattern no longer matches the sources.
+
+The proofs and mutate jobs also run `make timing`, print the summary in the job log and upload `results/timing/` as a build artifact (`timing-proofs`, `timing-mutate-shard0` … `shard5`), so the times of every CI run, with the runner's core count, can be cited. For the mutation check, cite one shard's time or the sum of the shards' CPU time, not the sum of their wall times, since the shards run in parallel.
 
 ### Measurement notes
 

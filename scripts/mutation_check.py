@@ -10,14 +10,22 @@ Usage (from the repository root):
   python3 scripts/mutation_check.py                 all mutants (~2 h on two cores)
   python3 scripts/mutation_check.py budget          only mutants whose name contains "budget"
   python3 scripts/mutation_check.py --shard 2/6     every 6th mutant starting at index 2 (CI runs 6 shards)
+  python3 scripts/mutation_check.py --solver-threads 4
+                                                    passed to Halmos (default: the cores this process
+                                                    may use, as `scripts/timed.py --cores` reports)
 Every mutant's pattern is checked before anything runs, whatever the filter or shard.
+Each KILLED/SURVIVED line ends with the time of that mutant's rebuild and Halmos run.
 Exit code 0 iff every selected mutant is killed.
 """
 import argparse
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from timed import cores_available  # noqa: E402
 
 # (source file, Halmos contract, extra Halmos flags)
 TOKEN = (Path("src/EnforcedToken.sol"), "HalmosProofs", ())
@@ -165,9 +173,10 @@ MUTANTS = [
 ]
 
 
-def halmos(contract: str, function: str, flags) -> str:
+def halmos(contract: str, function: str, flags, threads: int) -> str:
     subprocess.run(["forge", "clean"], check=True, capture_output=True)
-    r = subprocess.run(["halmos", "--contract", contract, "--function", function, *flags],
+    r = subprocess.run(["halmos", "--contract", contract, "--function", function,
+                        "--solver-threads", str(threads), *flags],
                        capture_output=True, text=True)
     out = re.sub(r"\x1b\[[0-9;]*m", "", r.stdout + r.stderr)
     if "Build failed" in out or "0 passed; 0 failed" in out:
@@ -179,6 +188,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("only", nargs="?", help="run only mutants whose name contains this text")
     ap.add_argument("--shard", default="0/1", help="I/N: run mutants with index = I (mod N)")
+    ap.add_argument("--solver-threads", type=int, default=cores_available(),
+                    help="passed to halmos --solver-threads (default: cores available)")
     args = ap.parse_args()
     i, n = (int(x) for x in args.shard.split("/"))
     if not 0 <= i < n:
@@ -196,17 +207,20 @@ def main() -> int:
     if not selected:
         print("no mutant selected")
         return 2
-    print(f"{len(selected)} of {len(MUTANTS)} mutants selected", flush=True)
+    print(f"{len(selected)} of {len(MUTANTS)} mutants selected, halmos --solver-threads {args.solver_threads}",
+          flush=True)
     killed = 0
     try:
         for (path, contract, flags), name, fn, old, new in selected:
             original = originals[path]
             path.write_text(original.replace(old, new, 1))
-            out = halmos(contract, fn, flags)
+            t0 = time.monotonic()
+            out = halmos(contract, fn, flags, args.solver_threads)
+            secs = time.monotonic() - t0
             path.write_text(original)
             ok = "Counterexample" in out or "[FAIL]" in out
             killed += ok
-            print(f"[{'KILLED' if ok else 'SURVIVED'}] {name}  ({fn})", flush=True)
+            print(f"[{'KILLED' if ok else 'SURVIVED'}] {name}  ({fn}, {secs:.1f} s)", flush=True)
     finally:
         for path, text in originals.items():
             path.write_text(text)
