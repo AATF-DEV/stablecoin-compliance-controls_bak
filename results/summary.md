@@ -66,11 +66,12 @@ Marginal cost from a least-squares fit over K ∈ [500, 1000]; max K is where th
 | Unfreeze | 68,069 |
 
 - Hold then seize: 167,228 gas.
-- Freezing a zero-balance account (2-of-4, Table 6) minus a funded one: 17,076 gas.
+- Freezing a zero-balance account (2-of-4, Table 6) minus a funded one (2-of-3): 17,076 gas, of which 17,100 execution gas and -24 intrinsic (calldata) gas.
+  Mixing N = 4 and N = 3 is sound: verification cost depends on M only, and the execution difference is that of a zero-to-non-zero versus a non-zero-to-non-zero storage write (20,000 − 2,900 = 17,100).
 
 ## Tiered authority (Table 8)
 
-Fast tier 2-of-5, slow tier 3-of-5 over two roles, guardians 2-of-3; single-threshold column with M = 2.
+Fast tier 2-of-5, slow tier 3-of-5 over two roles, guardians 2-of-3; single-threshold column with M = 2 (N = 4 from Table 6 for the zero-balance freeze, N = 3 from Table 7 otherwise; the cost depends on M only).
 
 | Action | TieredAuthority | ComplianceAuthority | Difference |
 |---|---:|---:|---:|
@@ -82,6 +83,7 @@ Fast tier 2-of-5, slow tier 3-of-5 over two roles, guardians 2-of-3; single-thre
 | Guardian cancellation | 37,440 | — | — |
 
 - Fast-tier extra cost: 17,907–19,374 gas.
+- Zero-balance minus funded fast-tier freeze, one signer set: 17,088 gas, of which 17,100 execution gas.
 - Hold then seize through the tiers: 258,956 gas.
 
 ## Bridging (Section 6.4, Bridging)
