@@ -242,8 +242,8 @@ Proved symbolically with [Halmos](https://github.com/a16z/halmos) (`test/Halmos.
 1. **Hold precedence**: seize and burn debit exactly the requested amount from an existing active hold; seize credits only a designated custody account.
 2. **Spendable-balance safety**: an account's held amount equals the sum of its active holds and never exceeds its balance.
 3. **Freeze safety**: no user-initiated transfer reduces the balance of a frozen or blocked account.
-4. **Supply conservation**: total supply equals minted minus burned-from-holds and equals the sum of balances.
-5. **Quorum**: compliance actions require M valid signatures from distinct registered signers. Unit tests cover too few signatures, duplicates, outsiders, replay, tampered calldata, and direct calls.
+4. **Supply conservation**: total supply equals minted minus burned-from-holds and equals the sum of balances. For `BridgedEnforcedToken`, minted value includes bridge-in mints and burned value includes bridge-out burns.
+5. **Quorum**: compliance actions require valid signatures from at least M distinct registered signers (exactly M in `ComplianceAuthority`). Unit tests cover too few signatures, duplicates, outsiders, replay, tampered calldata, and direct calls.
 6. **Log completeness**: every compliance action extends the hash-chained log by exactly one entry, and the new head is the specified hash of that entry.
 
 The Halmos checks make the token's entire storage symbolic, so they quantify over all contract states. Each check assumes the invariant for the accounts a call touches, runs one public function with symbolic arguments and caller, and asserts that the invariant still holds and that state changed exactly as specified, including frame conditions that an arbitrary untouched account, an arbitrary other hold record, an arbitrary other allowance entry and an arbitrary other custody-list entry are unchanged. `setCustody` changes exactly one entry (never for address 0) and is logged. Allowance bookkeeping is specified exactly: `transferFrom` spends exactly the amount of a finite allowance and keeps an infinite one, and `approve` sets exactly one entry. Every state-changing public function is covered (`transfer`, `transferFrom`, `approve`, `mint`, `setStatus`, `blockBatch`, `placeHold`, `releaseHold`, `seize`, `burnFromHold`, `setCustody`), and non-authorized callers are proved to be rejected by every compliance function, including `blockBatch` and `setCustody`. Starting from the initial state (no balances, holds or log entries; only the deployment's custody list), this is an inductive proof over all call sequences for invariants 1–4 and 6; each check also asserts that supply and the compliance log change only as specified (non-compliance calls leave the log untouched, and every compliance action appends exactly the specified entry to the head). For invariant 5, Halmos proves the token side (no caller other than the authority can change compliance state); signature verification in `ComplianceAuthority` is covered by unit tests only. `blockBatch` is checked for batches of one or two addresses.
@@ -252,12 +252,12 @@ The Halmos checks make the token's entire storage symbolic, so they quantify ove
 
 ```bash
 pip install halmos==0.3.3
-make prove          # token, bridged-token and tiered-authority proofs  (~9 min on two cores)
-make mutate         # 54 injected bugs, each must yield a counterexample (~2 h on two cores; CI runs six shards in parallel)
+make prove THREADS=8   # token, bridged-token and tiered-authority proofs  (~3.5 min; ~9 min on two cores)
+make mutate THREADS=8  # 54 injected bugs, each must yield a counterexample (~27 min; ~2 h on two cores; CI runs six shards in parallel)
 make timing         # how long they took and how many cores they had and used (see "Timing" below)
 ```
 
-Both targets pass `--solver-threads` to Halmos, set by default to the cores this process may use, and record their own timing; the times above are only indicative.
+Both targets pass `--solver-threads` to Halmos, set by default to the cores this process may use, and record their own timing. The times reported in the paper were measured with `THREADS=8` (`--solver-threads 8`) on a 12-core, 24-thread desktop CPU; use the same setting to compare a run with the paper (see [Timing](#6-timing-of-the-proofs-and-the-mutation-check)). Halmos keeps only about 1.5 cores busy on average, so the setting matters less than the CPU's single-core speed.
 
 ## What is checked
 
@@ -373,7 +373,7 @@ make build                                       # "Compiler run successful"
 
 ### 3. Run everything and collect the results
 
-Each target can be run on its own. Times are indicative, for a two-core machine; `make prove` and `make mutate` measure and record their own (step 6).
+Each target can be run on its own. Times are indicative, for a two-core machine; for `make prove` and `make mutate` the time with `THREADS=8` on the paper's 12-core, 24-thread machine is given in parentheses. Both measure and record their own (step 6).
 
 | Command | What it does | Writes | Expected output | Time |
 |---|---|---|---|---|
@@ -384,8 +384,8 @@ Each target can be run on its own. Times are indicative, for a two-core machine;
 | `make data` | SMT trees and proofs | `data/smt_*.json` | one line per N | ~2 min |
 | `make report` | the paper's tables and derived figures from the CSVs | `results/summary.md` | `written to …` | seconds |
 | `make plot` | Figure 2 of the paper | `results/compliance_gas_benchmark.{pdf,png}` | `written to …` | seconds |
-| `make prove` | symbolic proofs | `results/timing/halmos_*.json` | `13 passed`, `16 passed`, `10 passed` | ~9 min |
-| `make mutate` | non-vacuity check | `results/timing/mutation.json` | `54/54 mutants killed` | ~2 h |
+| `make prove` | symbolic proofs | `results/timing/halmos_*.json` | `13 passed`, `16 passed`, `10 passed` | ~9 min (3.5 min) |
+| `make mutate` | non-vacuity check | `results/timing/mutation.json` | `54/54 mutants killed` | ~2 h (27 min) |
 | `make timing` | timing summary of the two above | `results/timing/summary.md`, `caption.tex` | `written to …` | seconds |
 
 `make all` runs `test tools ingest prove mutate bench report timing plot` in that order. To keep a log of the whole run:
@@ -437,11 +437,11 @@ make mutate THREADS=4 SHARD=1/6     # one of six shards; timing goes to results/
 make timing
 ```
 
-`make timing` writes `results/timing/summary.md` (one row per run, then each suite's checks from slowest to fastest) and `results/timing/caption.tex`, the sentence for the paper's Halmos table, for example:
+`make timing` writes `results/timing/summary.md` (one row per run, then each suite's checks from slowest to fastest) and `results/timing/caption.tex`, the sentence for the paper's Halmos table. For the run reported in the paper (`make prove THREADS=8` and `make mutate THREADS=8`, AMD Ryzen 9 9900X, 12 cores and 24 threads, WSL2) it reads:
 
-> All pass; wall-clock times: token 13 checks in 12.8 s, bridged token 16 checks in 29.9 s, tiered authority 10 checks in 154 s (2 cores available, 1.9 in use on average, `--solver-threads 2`, Halmos 0.3.3).
+> All pass; wall-clock times: token 13 checks in 18.6 s, bridged token 16 checks in 30.8 s, tiered authority 10 checks in 150 s (24 cores available, 1.5 in use on average, `--solver-threads 8`, Halmos 0.3.3).
 
-The paper can `\input` that file instead of stating core counts and times by hand. The numbers in this example are illustrative. Timing is not part of `make reproduce`, and `results/timing/` is git-ignored.
+The mutation check took 26.8 min wall-clock and 1.7 h CPU time in that run (3.9 cores in use on average). Timing is not part of `make reproduce`, and `results/timing/` is git-ignored.
 
 ### Continuous integration
 
@@ -470,6 +470,10 @@ The proofs and mutate jobs also run `make timing`, print the summary in the job 
 - **Fixed budget epochs.** Two budgets can be spent within a short time around an epoch boundary.
 - **Two chains in one EVM.** The propagation tests switch `block.chainid`; they test signing domains and per-chain state, not cross-chain latency.
 - **Synthetic sanctions data**, as noted above.
+- **Hold size.** A hold record stores a `uint96` amount, so a single hold is limited to 2⁹⁶ − 1 base units (the account's aggregate held amount is a `uint120`).
+- **Initial custody list.** The custody accounts set at deployment are emitted as `CustodySet` events but are not part of the hash-chained compliance log; auditors take them from the deployment transaction.
+- **Queued actions survive rotation.** Removing a signer does not invalidate slow-tier actions it already helped to queue; they stay executable after their delay unless the guardians cancel them.
+- **Bridge-limit refill.** As in ERC-7281, a limit refills at `max / 1 day` per second, rounded down, so a limit below 86,400 base units refills only once the full day has passed.
 - **Measurements** are for one compiler version and setting, on the Ethereum cost schedule, with a pre-funded transfer recipient and uniformly random SMT addresses.
 
 ## Citation

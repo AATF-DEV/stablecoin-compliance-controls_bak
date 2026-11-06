@@ -145,8 +145,12 @@ for v, label in [("freeze", "Freeze"), ("place_hold", "Hold (place)"), ("seize_f
     w(f"| {label} | {n(g(L, v, 0))} |")
 w("")
 w(f"- Hold then seize: {n(g(L, 'place_hold', 0) + g(L, 'seize_full', 0))} gas.")
-w(f"- Freezing a zero-balance account (2-of-4, Table 6) minus a funded one: "
-  f"{n(g(q, 'quorum', 2) - g(L, 'freeze', 0))} gas.")
+zq, fl = q["quorum"][2], L["freeze"][0]
+w(f"- Freezing a zero-balance account (2-of-4, Table 6) minus a funded one (2-of-3): "
+  f"{n(zq['tx_gas'] - fl['tx_gas'])} gas, of which {n(zq['exec_gas'] - fl['exec_gas'])} execution gas "
+  f"and {zq['intrinsic_gas'] - fl['intrinsic_gas']:+,} intrinsic (calldata) gas.")
+w("  Mixing N = 4 and N = 3 is sound: verification cost depends on M only, and the execution difference is "
+  "that of a zero-to-non-zero versus a non-zero-to-non-zero storage write (20,000 − 2,900 = 17,100).")
 w("")
 
 # ------------------------------------------------------------------ tiered
@@ -154,7 +158,8 @@ T = {v: r[max(r)] for v, r in load("tiered.csv").items()}
 tg = {v: r["tx_gas"] for v, r in T.items()}
 w("## Tiered authority (Table 8)")
 w("")
-w("Fast tier 2-of-5, slow tier 3-of-5 over two roles, guardians 2-of-3; single-threshold column with M = 2.")
+w("Fast tier 2-of-5, slow tier 3-of-5 over two roles, guardians 2-of-3; single-threshold column with M = 2 "
+  "(N = 4 from Table 6 for the zero-balance freeze, N = 3 from Table 7 otherwise; the cost depends on M only).")
 w("")
 w("| Action | TieredAuthority | ComplianceAuthority | Difference |")
 w("|---|---:|---:|---:|")
@@ -175,6 +180,9 @@ w(f"| Guardian cancellation | {n(tg['guardian_cancel'])} | — | — |")
 extra = [a - c for _, a, c in rows]
 w("")
 w(f"- Fast-tier extra cost: {n(min(extra))}–{n(max(extra))} gas.")
+w(f"- Zero-balance minus funded fast-tier freeze, one signer set: "
+  f"{n(tg['fast_freeze_zero_balance'] - tg['fast_freeze_funded'])} gas, of which "
+  f"{n(T['fast_freeze_zero_balance']['exec_gas'] - T['fast_freeze_funded']['exec_gas'])} execution gas.")
 w(f"- Hold then seize through the tiers: "
   f"{n(tg['fast_place_hold'] + tg['slow_queue_seize'] + tg['slow_execute_seize'])} gas.")
 w("")

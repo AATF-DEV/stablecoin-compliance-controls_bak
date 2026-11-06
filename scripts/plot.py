@@ -15,8 +15,9 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "results"
 TX_CAP = 2 ** 24
 
-# Fixed entity -> color (validated categorical slots 1-4 + neutral gray), never by rank.
-C = {"packed": "#2a78d6", "mapping": "#eb6834", "smt": "#1baf7a", "naive": "#c98500", "base": "#6b6a66"}
+# Fixed entity -> color (validated categorical slots 1-5 + neutral gray), never by rank.
+C = {"packed": "#2a78d6", "mapping": "#eb6834", "smt": "#1baf7a", "naive": "#c98500", "aggregate": "#8a5cc2",
+     "base": "#6b6a66"}
 INK, INK2 = "#0b0b0b", "#52514e"
 
 
@@ -47,12 +48,14 @@ base = t["baseline"][0][1]
 bl = t["blacklist_mapping"][0][1]
 a1.plot(ks, [base] * len(ks), ls=":", color=C["base"], label="ERC-20 baseline")
 a1.plot(ks, [bl] * len(ks), ls="--", color=C["mapping"], label="Blacklist mapping (no holds)")
+a1.plot(*zip(*t["separate_aggregate"]), marker="D", ms=3, color=C["aggregate"],
+        label="Separate status + aggregate held")
 a1.plot(*zip(*t["naive_holds"]), marker="^", color=C["naive"], label="Naive: status + hold array")
 a1.plot(*zip(*t["enforced_packed"]), marker="o", color=C["packed"], label="Packed slot (this work)")
 a1.set_xlabel("Active holds on sender $k$")
 a1.set_ylabel("Transaction gas")
 a1.set_title("(a) Transfer cost vs. holds")
-a1.set_ylim(0, 90000)
+a1.set_ylim(0, 120000)
 a1.yaxis.set_major_formatter(lambda v, _: f"{v/1000:.0f}k")
 a1.legend(loc="upper left", frameon=False)
 

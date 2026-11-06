@@ -114,7 +114,7 @@ jobs:
           path: results/timing/
           if-no-files-found: ignore
 
-  # The mutation check runs one Halmos check per injected bug (~90 min on two cores), so it is
+  # The mutation check runs one Halmos check per injected bug (~2 h on two cores), so it is
   # split into six shards that run in parallel. Each shard first verifies every mutant's pattern.
   mutate:
     runs-on: ubuntu-latest
